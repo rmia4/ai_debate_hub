@@ -68,3 +68,38 @@ CREATE TABLE IF NOT EXISTS oauth_connections (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS oauth_connections_active
   ON oauth_connections (user_id, participant) WHERE revoked_at IS NULL;
+
+-- 토론방. 모든 조회·수정은 owner_id 조건과 함께 src/db/discussions.ts를 거친다
+CREATE TABLE IF NOT EXISTS discussions (
+  id                 text PRIMARY KEY CHECK (length(id) >= 12),
+  owner_id           text NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  topic              text NOT NULL,
+  context            text NOT NULL DEFAULT '',
+  mode               text NOT NULL CHECK (mode IN ('parallel', 'sequential')),
+  starter            text CHECK (starter IN ('claude', 'codex')),
+  status             text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'agreed', 'max_reached', 'closed')),
+  current_round      int NOT NULL DEFAULT 1,
+  max_rounds         int NOT NULL,
+  min_rounds         int,
+  agreed_proposal_id bigint,
+  ended_at           timestamptz,
+  created_at         timestamptz NOT NULL DEFAULT now(),
+  updated_at         timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS discussions_owner_id ON discussions (owner_id, status);
+
+-- 답변. 동시 방식은 라운드, 순차 방식은 턴 번호를 round에 둔다
+CREATE TABLE IF NOT EXISTS turns (
+  id                   bigserial PRIMARY KEY,
+  discussion_id        text NOT NULL REFERENCES discussions (id) ON DELETE CASCADE,
+  round                int NOT NULL,
+  participant          text NOT NULL CHECK (participant IN ('claude', 'codex')),
+  content              text NOT NULL,
+  proposal             text,
+  agreement            text CHECK (agreement IN ('agree', 'partial', 'disagree')),
+  accepted_proposal_id bigint REFERENCES turns (id),
+  sign                 boolean,
+  open_issues          jsonb NOT NULL DEFAULT '[]',
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (discussion_id, round, participant)
+);

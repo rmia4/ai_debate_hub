@@ -64,7 +64,7 @@ export function createApp(config: Config, db: Db) {
           .json({ error: 'invalid_token' });
         return;
       }
-      await handleMcp(req, res, caller);
+      await handleMcp(req, res, caller, db);
     } catch (e) {
       next(e);
     }

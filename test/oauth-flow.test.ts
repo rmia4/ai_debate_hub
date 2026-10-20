@@ -85,9 +85,11 @@ describe('MCP 클라이언트', () => {
       }),
     );
     const { tools } = await client.listTools();
-    expect(tools.map((x) => x.name)).toEqual(['get_state']);
-    const r = (await client.callTool({ name: 'get_state', arguments: { discussion_id: 'x' } })) as { content: { text: string }[] };
-    expect(JSON.parse(r.content[0].text)).toMatchObject({ me: 'claude', user: sdk.userId });
+    expect(tools.map((x) => x.name).sort()).toEqual(['get_state', 'get_summary', 'start_discussion', 'submit']);
+    const created = (await client.callTool({ name: 'start_discussion', arguments: { topic: 'SDK 시험' } })) as { content: { text: string }[] };
+    const { discussion_id } = JSON.parse(created.content[0].text);
+    const r = (await client.callTool({ name: 'get_state', arguments: { discussion_id } })) as { content: { text: string }[] };
+    expect(JSON.parse(r.content[0].text)).toMatchObject({ me: 'claude', discussion_id, status: 'active' });
     await client.close();
   });
 });
