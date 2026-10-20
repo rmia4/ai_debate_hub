@@ -1,10 +1,19 @@
+export interface OAuthAppCredentials {
+  clientId: string;
+  clientSecret: string;
+}
+
 export interface Config {
   baseUrl: string;
   issuer: string;
   resource: string;
-  stage1Passcode: string;
   cookieKeys: string[];
   jwks?: { keys: Record<string, unknown>[] };
+  // 설정된 소셜 로그인만 로그인 화면에 표시한다
+  github?: OAuthAppCredentials;
+  google?: OAuthAppCredentials;
+  // 약관·개인정보 처리방침에 표시할 운영자 연락처
+  contactEmail?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -14,12 +23,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (!v) throw new Error(`${name} is required`);
     return v;
   };
-  return {
+  const credentials = (prefix: string): OAuthAppCredentials | undefined => {
+    const clientId = env[`${prefix}_CLIENT_ID`];
+    const clientSecret = env[`${prefix}_CLIENT_SECRET`];
+    return clientId && clientSecret ? { clientId, clientSecret } : undefined;
+  };
+  const config: Config = {
     baseUrl,
     issuer: `${baseUrl}/oauth`,
     resource: `${baseUrl}/mcp`,
-    stage1Passcode: required('STAGE1_PASSCODE'),
     cookieKeys: required('COOKIE_KEYS').split(','),
     jwks: env.JWKS ? JSON.parse(env.JWKS) : undefined,
+    github: credentials('GITHUB'),
+    google: credentials('GOOGLE'),
+    contactEmail: env.CONTACT_EMAIL || undefined,
   };
+  if (!config.github && !config.google) throw new Error('GITHUB_* or GOOGLE_* credentials are required');
+  return config;
 }
