@@ -254,7 +254,19 @@ export async function refresh(s: TestServer, clientId: string, refreshToken: str
   return token(s, { grant_type: 'refresh_token', client_id: clientId, refresh_token: refreshToken, resource: s.config.resource });
 }
 
-export async function callGetState(s: TestServer, accessToken: string) {
+export interface ToolResult<T = Record<string, any>> {
+  status: number;
+  isError: boolean;
+  data: T;
+}
+
+// MCP 도구를 호출한다. 도구 오류(isError)와 JSON-RPC 오류 모두 data에 담는다.
+export async function callTool<T = Record<string, any>>(
+  s: TestServer,
+  accessToken: string,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<ToolResult<T>> {
   const res = await fetch(s.config.resource, {
     method: 'POST',
     headers: {
@@ -262,16 +274,29 @@ export async function callGetState(s: TestServer, accessToken: string) {
       'content-type': 'application/json',
       accept: 'application/json, text/event-stream',
     },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'tools/call',
-      params: { name: 'get_state', arguments: { discussion_id: 'dummy' } },
-    }),
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
   });
-  if (res.status !== 200) return { status: res.status, state: undefined };
-  const body = (await res.json()) as { result: { content: { text: string }[] } };
-  return { status: res.status, state: JSON.parse(body.result.content[0].text) as { user: string; me: string } };
+  if (res.status !== 200) return { status: res.status, isError: true, data: undefined as T };
+  const body = (await res.json()) as { result?: { isError?: boolean; content: { text: string }[] }; error?: unknown };
+  if (body.error) return { status: res.status, isError: true, data: body.error as T };
+  const text = body.result!.content[0].text;
+  let data: T;
+  try {
+    data = JSON.parse(text) as T;
+  } catch {
+    data = { message: text } as T;
+  }
+  return { status: res.status, isError: !!body.result!.isError, data };
+}
+
+// 토큰이 어느 (사용자, 참여자)로 판별되는지 확인한다. 토론을 하나 만들어 소유자와 get_state의 me를 읽고 지운다.
+export async function callGetState(s: TestServer, accessToken: string) {
+  const created = await callTool(s, accessToken, 'start_discussion', { topic: 'whoami' });
+  if (created.status !== 200) return { status: created.status, state: undefined };
+  const id = created.data.discussion_id as string;
+  const state = await callTool(s, accessToken, 'get_state', { discussion_id: id });
+  const { rows } = await s.db.query<{ owner_id: string }>(`DELETE FROM discussions WHERE id = $1 RETURNING owner_id`, [id]);
+  return { status: state.status, state: { user: rows[0].owner_id, me: state.data.me as string } };
 }
 
 // 처음부터 끝까지 연결해 토큰을 받는다
