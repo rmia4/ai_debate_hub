@@ -18,8 +18,20 @@ export interface Config {
   cronSecret?: string;
 }
 
+// 서버를 띄우는 데 꼭 필요한데 비어 있는 환경변수 이름 (값은 다루지 않는다)
+export function missingEnv(env: NodeJS.ProcessEnv = process.env): string[] {
+  const missing = ['DATABASE_URL', 'COOKIE_KEYS'].filter((name) => !env[name]);
+  const hasPair = (prefix: string) => env[`${prefix}_CLIENT_ID`] && env[`${prefix}_CLIENT_SECRET`];
+  if (!hasPair('GITHUB') && !hasPair('GOOGLE')) {
+    missing.push('GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET 또는 GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET');
+  }
+  return missing;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const baseUrl = (env.BASE_URL ?? 'http://localhost:3000').replace(/\/$/, '');
+  // BASE_URL이 없으면 Vercel이 자동으로 넣는 운영 도메인을 쓴다
+  const vercelDomain = env.VERCEL_PROJECT_PRODUCTION_URL;
+  const baseUrl = (env.BASE_URL ?? (vercelDomain ? `https://${vercelDomain}` : 'http://localhost:3000')).replace(/\/$/, '');
   const required = (name: string) => {
     const v = env[name];
     if (!v) throw new Error(`${name} is required`);
