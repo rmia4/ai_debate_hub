@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { Db } from '../db/db.js';
 import { currentProposal, DiscussionError, discussionsFor, type Discussion, type Turn } from '../db/discussions.js';
 import type { Participant } from '../oauth/connections.js';
+import { instructionFor } from '../instructions.js';
 import type { Caller } from './caller.js';
 
 const RULE = '쉽게 동의하지 말고 근거를 제시할 것.';
@@ -118,22 +119,6 @@ function nextStep(d: Discussion, turns: Turn[], me: Participant) {
   if (d.mode === 'sequential') return { participant: opponentOf(me), turn: d.current_round };
   if (isMyTurn(d, turns, me)) return { round: d.current_round, participant: 'both' };
   return { round: d.current_round, participant: opponentOf(me) };
-}
-
-function instructionFor(d: Discussion, participant: Participant) {
-  const name = participant === 'claude' ? 'Claude' : 'Codex';
-  const flow =
-    d.mode === 'parallel'
-      ? `동시 방식입니다. 매 라운드 get_state로 직전 라운드를 읽고 submit으로 답변하세요. 라운드 1은 상대 답변 없이 독립적으로 답합니다.`
-      : `순차 방식입니다. get_state로 상대 직전 턴을 읽고 차례일 때만 submit하세요. 현재 합의안을 수정 없이 받아들일 때만 sign=true로 사인합니다.`;
-  return [
-    `당신은 AI Debate Hub 토론의 ${name} 참여자입니다. 토론 ID: ${d.id}`,
-    `주제: ${d.topic}`,
-    flow,
-    `답변은 반드시 submit 도구로 제출하세요. 채팅에만 쓰면 기록되지 않습니다.`,
-    RULE,
-    `먼저 get_state를 호출해 상태를 확인하세요.`,
-  ].join('\n');
 }
 
 function buildServer(caller: Caller, db: Db): McpServer {

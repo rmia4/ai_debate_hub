@@ -1,15 +1,37 @@
+import { timingSafeEqual } from 'node:crypto';
 import express from 'express';
 import type { Config } from './config.js';
+import { runCleanup } from './db/cleanup.js';
 import type { Db } from './db/db.js';
 import { hitRateLimit } from './db/rate-limit.js';
 import { resolveCaller } from './mcp/caller.js';
 import { handleMcp } from './mcp/server.js';
 import { interactionRouter } from './oauth/interaction.js';
 import { createProvider, MCP_SCOPE } from './oauth/provider.js';
+import { adminRouter } from './web/admin.js';
 import { authRouter } from './web/auth-routes.js';
+import { APP_JS } from './web/html.js';
 import { pagesRouter } from './web/pages.js';
 
 export const REGISTER_RATE_LIMIT = { windowSeconds: 60 * 60, limit: 100 };
+
+// 서버 렌더링 화면은 인라인 스크립트가 없고 스크립트는 /static/app.js만 쓴다.
+// form-action은 동의 제출 뒤 클라이언트 콜백으로의 리디렉트까지 막으므로 두지 않는다.
+export const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'",
+].join('; ');
+
+const bearerMatches = (header: string | undefined, secret: string) => {
+  const a = Buffer.from(header ?? '');
+  const b = Buffer.from(`Bearer ${secret}`);
+  return a.length === b.length && timingSafeEqual(a, b);
+};
 
 export function createApp(config: Config, db: Db) {
   const provider = createProvider(config, db);
@@ -17,6 +39,35 @@ export function createApp(config: Config, db: Db) {
   const app = express();
   app.set('trust proxy', true);
   app.disable('x-powered-by');
+
+  app.use((_req, res, next) => {
+    res.set({
+      'content-security-policy': CSP,
+      'x-content-type-options': 'nosniff',
+      'x-frame-options': 'DENY',
+      'referrer-policy': 'same-origin',
+      'cross-origin-opener-policy': 'same-origin',
+      'strict-transport-security': 'max-age=31536000',
+    });
+    next();
+  });
+
+  app.get('/static/app.js', (_req, res) => {
+    res.type('text/javascript').set('cache-control', 'public, max-age=3600').send(APP_JS);
+  });
+
+  // 하루 1회 정리 작업 (vercel.json의 crons). Vercel은 CRON_SECRET을 Bearer로 보낸다.
+  app.get('/cron/cleanup', async (req, res, next) => {
+    try {
+      if (!config.cronSecret || !bearerMatches(req.get('authorization'), config.cronSecret)) {
+        res.status(401).json({ error: 'unauthorized' });
+        return;
+      }
+      res.json({ deleted: await runCleanup(db) });
+    } catch (e) {
+      next(e);
+    }
+  });
 
   // 브라우저 기반 MCP 클라이언트(예: MCP Inspector)용 CORS
   app.use(['/mcp', '/.well-known'], (req, res, next) => {
@@ -91,6 +142,7 @@ export function createApp(config: Config, db: Db) {
 
   app.use(authRouter(config, db));
   app.use(pagesRouter(config, db));
+  app.use(adminRouter(config, db));
 
   return app;
 }

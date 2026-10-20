@@ -84,6 +84,7 @@ export async function startTestServer(): Promise<TestServer> {
   const config = loadConfig({
     BASE_URL: baseUrl,
     COOKIE_KEYS: 'test-key',
+    CRON_SECRET: 'cron-secret',
     GITHUB_CLIENT_ID,
     GITHUB_CLIENT_SECRET: 'github-secret',
     GOOGLE_CLIENT_ID,
