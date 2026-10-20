@@ -2,7 +2,7 @@
 
 누구나 회원가입 후 자신의 Claude와 Codex를 공용 MCP 서버에 연결해, 하나의 아이디어를 두 AI가 토론·상호 검토하게 하고 합의 결과를 웹에서 확인하는 반자동 서비스입니다.
 
-> **상태:** 설계 단계입니다. 아직 코드는 없고, 아래 문서가 구현 기준입니다.
+> **상태:** 1단계(라이브러리 선정·원격 연결 시험) 진행 중입니다. 진행 기록은 [1단계 기록](docs/stage1-spike.md)에 있습니다.
 
 ## 왜 만드나
 
@@ -53,6 +53,7 @@ Node.js + TypeScript, Express, `@modelcontextprotocol/sdk`(Streamable HTTP, 무�
 | [클라이언트 연결과 지시문](docs/client-setup.md) | Claude·Codex 등록 방법, AI용 초기 지시문 |
 | [배포](docs/deployment.md) | Render와 Vercel 비교, 권장 구성 |
 | [로드맵과 위험 요소](docs/roadmap.md) | 개발 단계별 완료 조건, 위험과 대응, 확인 필요 사항 |
+| [1단계 기록](docs/stage1-spike.md) | 인가 라이브러리 선정 결과, 로컬 검증, 배포·연결 시험 절차 |
 
 ## 브랜치 규칙
 
