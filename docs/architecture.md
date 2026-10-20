@@ -34,8 +34,8 @@ flowchart LR
 | 언어·런타임 | Node.js + TypeScript | 공식 MCP TypeScript SDK가 가장 성숙 |
 | MCP | `@modelcontextprotocol/sdk` (Streamable HTTP, 무상태) | Claude·Codex 모두 지원하는 전송 방식 |
 | 웹 | Express | Vercel이 공식 지원, Render로도 이전 가능 ([Vercel Express 안내](https://vercel.com/docs/frameworks/backend/express)) |
-| 회원 인증 | Better Auth 또는 Passport + GitHub·Google OAuth, 세션은 DB 저장 | 비밀번호·메일 인프라 불필요, 서버리스 인스턴스 간 세션 공유 |
-| MCP 인가 서버 | 같은 앱에 OAuth 2.1 인가 서버 내장 (인증 라이브러리의 OAuth 제공자 기능 또는 `oidc-provider` 검토) | 별도 인증 서비스 없이 무료 호스팅 하나로 운영 |
+| 회원 인증 | Arctic(GitHub·Google OAuth 클라이언트) + 직접 만든 DB 세션 ([2단계 기록](stage2-auth.md)) | 비밀번호·메일 인프라 불필요, 서버리스 인스턴스 간 세션 공유 |
+| MCP 인가 서버 | 같은 앱에 OAuth 2.1 인가 서버 내장 (`oidc-provider`, [1단계 기록](stage1-spike.md)) | 별도 인증 서비스 없이 무료 호스팅 하나로 운영 |
 | 입력 검증 | zod | 도구 입력 스키마와 검증을 한 번에 정의 |
 | DB | PostgreSQL (`pg` 또는 Drizzle) | 행 잠금·트랜잭션·유니크 제약 활용 |
 | 웹 화면 | 서버 렌더링 HTML + marked + sanitize-html | 별도 프론트엔드 불필요, AI 본문을 안전하게 렌더링 |
