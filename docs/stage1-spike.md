@@ -31,7 +31,7 @@
 | 판별 함수 한 곳 | [`resolveCaller`](../src/mcp/caller.ts) |
 | 루프백 콜백 경고 | 리디렉트 주소가 모두 루프백이면 동의 화면에 경고 표시 |
 
-1단계 로그인은 시험용입니다(사용자 이름 + `STAGE1_PASSCODE`). 2단계에서 소셜 로그인으로 바꿉니다.
+1단계 로그인은 시험용이었습니다(사용자 이름 + `STAGE1_PASSCODE`). 2단계에서 GitHub·Google 로그인으로 바꿨습니다.
 
 ## 로컬 검증 결과
 
@@ -58,7 +58,7 @@
    ```
 
 2. **키:** `npm run gen-keys` 출력값을 `JWKS`로 씁니다.
-3. **Vercel:** 저장소를 가져오고 환경변수 `BASE_URL`(고정 도메인, 끝에 `/` 없음), `DATABASE_URL`, `STAGE1_PASSCODE`, `COOKIE_KEYS`, `JWKS`를 설정합니다. Claude는 Anthropic 클라우드에서 접속하므로 배포 보호(Vercel Authentication)가 걸린 미리보기 주소는 쓸 수 없습니다.
+3. **Vercel:** 저장소를 가져오고 환경변수 `BASE_URL`(고정 도메인, 끝에 `/` 없음), `DATABASE_URL`, `COOKIE_KEYS`, `JWKS`와 소셜 로그인 키([2단계 기록](stage2-auth.md#배포-시-추가-설정))를 설정합니다. Claude는 Anthropic 클라우드에서 접속하므로 배포 보호(Vercel Authentication)가 걸린 미리보기 주소는 쓸 수 없습니다.
 4. **Claude:** 커스텀 커넥터에 `<BASE_URL>/mcp`를 등록하고, 로그인·동의에서 "Claude용"을 고른 뒤 채팅에서 `get_state`를 호출합니다.
 5. **Codex:** `~/.codex/config.toml`에 등록하고 `codex mcp login ai-debate` 후 "Codex용"을 고르고 `get_state`를 호출합니다.
 6. **등록 방식 확인:** 아래 쿼리로 두 클라이언트가 CIMD(`client_id`가 `https://`로 시작)와 DCR 중 무엇을 썼는지 기록합니다.
@@ -68,6 +68,8 @@
    ```
 
 ## 2단계로 넘길 확인 사항
+
+> 아래 중 앞의 세 항목은 2단계에서 처리했습니다([2단계 기록](stage2-auth.md#1단계에서-넘어온-확인-사항)). Neon 풀링 주소 확인은 배포 시험에 남아 있습니다.
 
 - 웹(`web`) 유형 DCR 클라이언트는 루프백이 아닌 `http://` 리디렉트도 등록됩니다. HTTPS 또는 루프백만 허용하도록 등록 정책을 추가해야 합니다.
 - 리프레시 토큰 동시 갱신에서 진 쪽은 `invalid_grant`가 아니라 서버 오류로 끝납니다. "정상적인 동시 갱신·응답 유실 재시도" 기준에 맞게 처리 방식을 정해야 합니다.

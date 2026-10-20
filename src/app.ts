@@ -1,10 +1,15 @@
 import express from 'express';
 import type { Config } from './config.js';
 import type { Db } from './db/db.js';
+import { hitRateLimit } from './db/rate-limit.js';
 import { resolveCaller } from './mcp/caller.js';
 import { handleMcp } from './mcp/server.js';
 import { interactionRouter } from './oauth/interaction.js';
 import { createProvider, MCP_SCOPE } from './oauth/provider.js';
+import { authRouter } from './web/auth-routes.js';
+import { pagesRouter } from './web/pages.js';
+
+export const REGISTER_RATE_LIMIT = { windowSeconds: 60 * 60, limit: 100 };
 
 export function createApp(config: Config, db: Db) {
   const provider = createProvider(config, db);
@@ -68,12 +73,24 @@ export function createApp(config: Config, db: Db) {
     res.status(405).set('allow', 'POST').json({ error: 'method_not_allowed' });
   });
 
+  // 동적 클라이언트 등록 횟수 제한 (IP 단위)
+  app.post('/oauth/register', async (req, res, next) => {
+    try {
+      if (await hitRateLimit(db, `register:${req.ip}`, REGISTER_RATE_LIMIT.windowSeconds, REGISTER_RATE_LIMIT.limit)) {
+        next();
+        return;
+      }
+      res.status(429).json({ error: 'too_many_requests', error_description: '등록 요청이 너무 많습니다' });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   app.use('/oauth/interaction', interactionRouter(provider, config, db));
   app.use('/oauth', providerCallback);
 
-  app.get('/', (_req, res) => {
-    res.type('text/plain; charset=utf-8').send('AI Debate Hub (1단계 시험 서버). MCP 주소: ' + config.resource);
-  });
+  app.use(authRouter(config, db));
+  app.use(pagesRouter(config, db));
 
   return app;
 }

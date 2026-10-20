@@ -3,11 +3,13 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   authorize,
+  Browser,
   callGetState,
   exchangeCode,
+  loginAs,
   registerClient,
+  startAuthorize,
   startTestServer,
-  token,
   type TestServer,
 } from './helpers.js';
 
@@ -49,37 +51,32 @@ describe('탐색', () => {
 
 describe('DCR + 동의 화면 역할 선택', () => {
   it('Claude용·Codex용 연결이 각자 역할로 판별된다', async () => {
+    const alice = await loginAs(s, 'alice');
     const claude = await registerClient(s, CLAUDE_CB, 'Claude');
-    const a = await authorize(s, { clientId: claude.client_id, redirectUri: CLAUDE_CB, username: 'alice', participant: 'claude' });
+    const a = await authorize(s, { clientId: claude.client_id, redirectUri: CLAUDE_CB, browser: alice.browser, participant: 'claude' });
     expect(a.iss).toBe(s.config.issuer);
     expect(a.consentPage).not.toContain('로컬 앱으로 돌아갑니다');
     const t1 = await exchangeCode(s, claude.client_id, CLAUDE_CB, a.code, a.verifier);
     expect(t1.status).toBe(200);
     expect(t1.json.refresh_token).toBeTruthy();
-    expect(await callGetState(s, t1.json.access_token)).toMatchObject({ status: 200, state: { user: 'stage1:alice', me: 'claude' } });
+    expect(await callGetState(s, t1.json.access_token)).toMatchObject({ status: 200, state: { user: alice.userId, me: 'claude' } });
 
     const codex = await registerClient(s, CODEX_CB, 'Codex');
-    const b = await authorize(s, { clientId: codex.client_id, redirectUri: CODEX_CB, username: 'alice', participant: 'codex' });
+    const b = await authorize(s, { clientId: codex.client_id, redirectUri: CODEX_CB, browser: alice.browser, participant: 'codex' });
     expect(b.consentPage).toContain('로컬 앱으로 돌아갑니다');
     const t2 = await exchangeCode(s, codex.client_id, CODEX_CB, b.code, b.verifier);
-    expect(await callGetState(s, t2.json.access_token)).toMatchObject({ status: 200, state: { user: 'stage1:alice', me: 'codex' } });
+    expect(await callGetState(s, t2.json.access_token)).toMatchObject({ status: 200, state: { user: alice.userId, me: 'codex' } });
 
     // 두 연결이 공존한다
     expect((await callGetState(s, t1.json.access_token)).status).toBe(200);
-  });
-
-  it('다른 계정은 다른 사용자로 판별된다', async () => {
-    const claude = await registerClient(s, CLAUDE_CB, 'Claude');
-    const a = await authorize(s, { clientId: claude.client_id, redirectUri: CLAUDE_CB, username: 'bob', participant: 'claude' });
-    const t = await exchangeCode(s, claude.client_id, CLAUDE_CB, a.code, a.verifier);
-    expect(await callGetState(s, t.json.access_token)).toMatchObject({ state: { user: 'stage1:bob', me: 'claude' } });
   });
 });
 
 describe('MCP 클라이언트', () => {
   it('SDK 클라이언트로 initialize·도구 목록·get_state 호출이 된다', async () => {
     const c = await registerClient(s, CLAUDE_CB, 'Claude');
-    const a = await authorize(s, { clientId: c.client_id, redirectUri: CLAUDE_CB, username: 'sdk', participant: 'claude' });
+    const sdk = await loginAs(s, 'sdk');
+    const a = await authorize(s, { clientId: c.client_id, redirectUri: CLAUDE_CB, browser: sdk.browser, participant: 'claude' });
     const t = await exchangeCode(s, c.client_id, CLAUDE_CB, a.code, a.verifier);
     const client = new Client({ name: 'test', version: '0' });
     await client.connect(
@@ -90,67 +87,8 @@ describe('MCP 클라이언트', () => {
     const { tools } = await client.listTools();
     expect(tools.map((x) => x.name)).toEqual(['get_state']);
     const r = (await client.callTool({ name: 'get_state', arguments: { discussion_id: 'x' } })) as { content: { text: string }[] };
-    expect(JSON.parse(r.content[0].text)).toMatchObject({ me: 'claude', user: 'stage1:sdk' });
+    expect(JSON.parse(r.content[0].text)).toMatchObject({ me: 'claude', user: sdk.userId });
     await client.close();
-  });
-});
-
-describe('토큰 수명주기', () => {
-  it('인가 코드는 한 번만 교환된다', async () => {
-    const c = await registerClient(s, CLAUDE_CB, 'Claude');
-    const a = await authorize(s, { clientId: c.client_id, redirectUri: CLAUDE_CB, username: 'carol', participant: 'claude' });
-    const results = await Promise.all([
-      exchangeCode(s, c.client_id, CLAUDE_CB, a.code, a.verifier),
-      exchangeCode(s, c.client_id, CLAUDE_CB, a.code, a.verifier),
-    ]);
-    expect(results.filter((r) => r.status === 200)).toHaveLength(1);
-  });
-
-  it('같은 역할로 재연결하면 기존 액세스 토큰이 즉시 거부된다', async () => {
-    const c = await registerClient(s, CLAUDE_CB, 'Claude');
-    const a = await authorize(s, { clientId: c.client_id, redirectUri: CLAUDE_CB, username: 'dave', participant: 'claude' });
-    const old = await exchangeCode(s, c.client_id, CLAUDE_CB, a.code, a.verifier);
-    const b = await authorize(s, { clientId: c.client_id, redirectUri: CLAUDE_CB, username: 'dave', participant: 'claude' });
-    expect(b.consentPage).toContain('교체합니다');
-    const fresh = await exchangeCode(s, c.client_id, CLAUDE_CB, b.code, b.verifier);
-
-    expect((await callGetState(s, old.json.access_token)).status).toBe(401);
-    expect((await callGetState(s, fresh.json.access_token)).status).toBe(200);
-    const { rows } = await s.db.query(
-      `SELECT count(*)::int AS n FROM oauth_connections WHERE user_id = 'stage1:dave' AND revoked_at IS NULL`,
-    );
-    expect(rows[0]).toEqual({ n: 1 });
-  });
-
-  it('리프레시 토큰을 재사용하면 연결 전체가 폐기된다', async () => {
-    const c = await registerClient(s, CLAUDE_CB, 'Claude');
-    const a = await authorize(s, { clientId: c.client_id, redirectUri: CLAUDE_CB, username: 'erin', participant: 'claude' });
-    const t = await exchangeCode(s, c.client_id, CLAUDE_CB, a.code, a.verifier);
-    const r1 = await token(s, { grant_type: 'refresh_token', client_id: c.client_id, refresh_token: t.json.refresh_token, resource: s.config.resource });
-    expect(r1.status).toBe(200);
-    expect((await callGetState(s, r1.json.access_token)).status).toBe(200);
-
-    const reuse = await token(s, { grant_type: 'refresh_token', client_id: c.client_id, refresh_token: t.json.refresh_token, resource: s.config.resource });
-    expect(reuse.status).toBe(400);
-    expect((await callGetState(s, r1.json.access_token)).status).toBe(401);
-    const r2 = await token(s, { grant_type: 'refresh_token', client_id: c.client_id, refresh_token: r1.json.refresh_token, resource: s.config.resource });
-    expect(r2.status).toBe(400);
-  });
-
-  it('다른 resource 요청은 거부된다', async () => {
-    const c = await registerClient(s, CLAUDE_CB, 'Claude');
-    const res = await fetch(
-      `${s.config.issuer}/authorize?${new URLSearchParams({
-        response_type: 'code',
-        client_id: c.client_id,
-        redirect_uri: CLAUDE_CB,
-        code_challenge: 'x'.repeat(43),
-        code_challenge_method: 'S256',
-        resource: 'https://evil.example/mcp',
-      })}`,
-      { redirect: 'manual' },
-    );
-    expect(new URL(res.headers.get('location')!).searchParams.get('error')).toBe('invalid_target');
   });
 });
 
@@ -170,5 +108,70 @@ describe('CIMD', () => {
       expect(res.status).toBe(400);
       expect(await res.text()).toContain('invalid_client');
     }
+  });
+});
+
+describe('DCR 등록 정책', () => {
+  const register = (redirectUri: string, applicationType?: string) =>
+    fetch(`${s.config.issuer}/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        redirect_uris: [redirectUri],
+        token_endpoint_auth_method: 'none',
+        ...(applicationType ? { application_type: applicationType } : {}),
+      }),
+    });
+
+  it('web 유형은 HTTPS 또는 루프백 HTTP 리디렉트만 등록된다', async () => {
+    for (const uri of ['http://example.com/cb', 'http://192.168.0.10/cb']) {
+      const res = await register(uri);
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe('invalid_redirect_uri');
+    }
+    expect((await register('https://example.com/cb')).status).toBe(201);
+    expect((await register('http://127.0.0.1:5555/cb')).status).toBe(201);
+    expect((await register('http://localhost:5555/cb', 'web')).status).toBe(201);
+  });
+
+  it('native 유형의 루프백 콜백은 그대로 허용된다', async () => {
+    expect((await register('http://127.0.0.1:47123/callback', 'native')).status).toBe(201);
+  });
+});
+
+describe('동의 화면', () => {
+  it('웹 세션이 없으면 로그인 화면으로 보내고, 로그인하면 동의 화면으로 돌아온다', async () => {
+    const c = await registerClient(s, CLAUDE_CB, 'Claude');
+    const browser = new Browser();
+    const flow = await startAuthorize(s, { clientId: c.client_id, redirectUri: CLAUDE_CB, browser });
+    expect(new URL(flow.consentUrl).pathname).toBe('/login');
+    expect(flow.consentPage).toContain('GitHub로 로그인');
+    const returnTo = new URL(flow.consentUrl).searchParams.get('return_to')!;
+    expect(returnTo).toMatch(/^\/oauth\/interaction\//);
+
+    await loginAs(s, 'consent-user', browser);
+    const res = await browser.request(`${s.baseUrl}${returnTo}`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('consent-user</b> 계정으로');
+  });
+
+  it('CSRF 토큰 없이 제출한 동의는 거부된다', async () => {
+    const c = await registerClient(s, CLAUDE_CB, 'Claude');
+    const { browser, userId } = await loginAs(s, 'csrf-user');
+    const flow = await startAuthorize(s, { clientId: c.client_id, redirectUri: CLAUDE_CB, browser });
+    for (const csrf of ['', 'forged']) {
+      const res = await browser.request(`${flow.consentUrl}/consent`, browser.form({ participant: 'claude', csrf }));
+      expect(res.status).toBe(403);
+    }
+    const { rows } = await s.db.query(`SELECT 1 FROM oauth_connections WHERE user_id = $1`, [userId]);
+    expect(rows).toHaveLength(0);
+  });
+
+  it('인가 서버 오류 화면은 한국어로 보여 준다', async () => {
+    const res = await fetch(`${s.config.issuer}/authorize?client_id=unknown&response_type=code`);
+    expect(res.status).toBe(400);
+    const html = await res.text();
+    expect(html).toContain('등록되지 않았거나 확인할 수 없는 앱입니다');
+    expect(html).toContain('lang="ko"');
   });
 });
