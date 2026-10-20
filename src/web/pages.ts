@@ -3,7 +3,8 @@ import type { Config } from '../config.js';
 import type { Db } from '../db/db.js';
 import { listConnections, revokeConnection } from '../oauth/connections.js';
 import { loginUrl } from './auth-routes.js';
-import { esc, logoutForm, page, suspendedPage } from './html.js';
+import { discussionPagesRouter } from './discussion-pages.js';
+import { appNav, esc, logoutForm, page, suspendedPage } from './html.js';
 import { checkCsrf, loadSession, type WebSession } from './session.js';
 
 const PARTICIPANT_LABEL = { claude: 'Claude용', codex: 'Codex용' } as const;
@@ -27,9 +28,23 @@ export function pagesRouter(config: Config, db: Db) {
       res.send(
         page(
           'AI Debate Hub',
-          `<p>내 Claude와 Codex를 같은 서버에 연결해 하나의 아이디어를 두 AI가 토론·검토하게 하는 서비스입니다.</p>
-          <p>MCP 주소: <code>${esc(config.resource)}</code></p>
-          <p>${web ? '<a href="/app/connections">연결 설정</a>' : '<a href="/login">로그인</a>'}</p>`,
+          `<p>내 Claude와 Codex를 같은 서버에 연결해, 하나의 아이디어를 두 AI가 토론·상호 검토하게 하는 무료 서비스입니다.
+          두 AI 사이에서 답변을 복사해 옮길 필요 없이, 서버가 기록·차례·합의 판정을 맡습니다.</p>
+          <h2>사용 방법</h2>
+          <ol>
+            <li>GitHub 또는 Google로 로그인합니다.</li>
+            <li>Claude와 Codex에 MCP 주소 <code>${esc(config.resource)}</code>를 등록하고, 동의 화면에서 각각 "Claude용"·"Codex용"을 고릅니다.</li>
+            <li>웹에서 토론방을 만들고, 발급된 지시문을 양쪽 채팅에 붙여 넣습니다.</li>
+            <li>각 채팅에 "다음 라운드 진행"을 입력하며 토론을 이어 갑니다.</li>
+            <li>합의되거나 최대 라운드에 도달하면 끝나고, 결과는 웹에서 확인·내보내기합니다.</li>
+          </ol>
+          <h2>진행 방식</h2>
+          <ul>
+            <li><b>동시</b>: 매 라운드 양쪽이 서로의 답을 보지 않고 한 번씩 답변합니다. 같은 합의안에 양쪽이 동의하면 합의입니다.</li>
+            <li><b>순차</b>: 한 턴씩 번갈아 답변합니다. 상대 사인 뒤 제안자가 다시 사인하면 합의입니다.</li>
+          </ul>
+          <p>AI 사용료는 각자의 Claude·Codex 구독에서 나갑니다. 기밀이나 개인정보는 넣지 마세요.</p>
+          <p>${web ? '<a class="btn" href="/app">내 토론으로</a>' : '<a class="btn" href="/login">로그인</a>'}</p>`,
         ),
       );
     } catch (e) {
@@ -105,10 +120,7 @@ export function pagesRouter(config: Config, db: Db) {
     }
   });
 
-  // 토론 목록은 4단계에서 만든다
-  router.get('/app', (_req, res) => {
-    res.redirect(303, '/app/connections');
-  });
+  router.use(discussionPagesRouter(config, db));
 
   router.get('/app/connections', async (_req, res, next) => {
     try {
@@ -130,7 +142,8 @@ export function pagesRouter(config: Config, db: Db) {
       res.send(
         page(
           '연결 설정',
-          `<p><b>${esc(web.user.display_name)}</b> 계정으로 로그인했습니다.</p>
+          `${appNav(web.user.role)}
+          <p><b>${esc(web.user.display_name)}</b> 계정으로 로그인했습니다.</p>
           <h2>연결된 앱</h2>
           ${
             connections.length

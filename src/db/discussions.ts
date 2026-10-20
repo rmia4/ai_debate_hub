@@ -21,6 +21,7 @@ export interface Discussion {
   agreed_proposal_id: string | null;
   ended_at: Date | null;
   created_at: Date;
+  updated_at: Date;
 }
 
 export interface Turn {
@@ -55,6 +56,35 @@ export interface SubmitInput {
 }
 
 export const CREATE_LIMITS = { active: 5, stored: 50, bytes: 5_000_000, perDay: 20 };
+export const INPUT_LIMITS = { topic: 200, context: 2000 };
+export const RETENTION_DAYS = 180;
+
+export interface Usage {
+  active: number;
+  stored: number;
+  bytes: number;
+  createdToday: number;
+}
+
+const createKey = (userId: string) => `discussion-create:${userId}`;
+const DAY_SECONDS = 24 * 60 * 60;
+
+// 텍스트 용량: topic·context와 모든 답변의 content·proposal·open_issues 문자열의 UTF-8 바이트 합
+async function usageOf(q: Queryable, userId: string): Promise<Usage> {
+  const { rows } = await q.query<Usage>(
+    `SELECT
+       (SELECT count(*) FROM discussions WHERE owner_id = $1 AND status = 'active')::int AS active,
+       (SELECT count(*) FROM discussions WHERE owner_id = $1)::int AS stored,
+       ((SELECT coalesce(sum(octet_length(topic) + octet_length(context)), 0) FROM discussions WHERE owner_id = $1)
+        + (SELECT coalesce(sum(octet_length(t.content) + coalesce(octet_length(t.proposal), 0)
+             + (SELECT coalesce(sum(octet_length(x)), 0) FROM jsonb_array_elements_text(t.open_issues) x)), 0)
+           FROM turns t JOIN discussions d ON d.id = t.discussion_id WHERE d.owner_id = $1))::float8 AS bytes,
+       (SELECT coalesce(max(count), 0) FROM rate_limits
+        WHERE key = $2 AND window_start = to_timestamp(floor(extract(epoch FROM now()) / $3::int) * $3::int))::int AS "createdToday"`,
+    [userId, createKey(userId), DAY_SECONDS],
+  );
+  return rows[0];
+}
 
 export class DiscussionError extends Error {
   constructor(
@@ -66,7 +96,8 @@ export class DiscussionError extends Error {
       | 'round_mismatch'
       | 'not_your_turn'
       | 'opponent_started'
-      | 'invalid_combination',
+      | 'invalid_combination'
+      | 'not_ended',
     message: string,
   ) {
     super(message);
@@ -74,7 +105,7 @@ export class DiscussionError extends Error {
 }
 
 const DISCUSSION_COLS = `id, owner_id, topic, context, mode, starter, status, current_round, max_rounds, min_rounds,
-  agreed_proposal_id::text AS agreed_proposal_id, ended_at, created_at`;
+  agreed_proposal_id::text AS agreed_proposal_id, ended_at, created_at, updated_at`;
 const TURN_COLS = `id::text AS id, round, participant, content, proposal, agreement,
   accepted_proposal_id::text AS accepted_proposal_id, sign, open_issues, created_at`;
 
@@ -85,6 +116,12 @@ const turnsOf = async (q: Queryable, discussionId: string) =>
 export const currentProposal = (turns: Turn[]) => turns.findLast((t) => t.proposal !== null);
 
 function settingsOf(input: CreateInput) {
+  if (!input.topic.trim() || input.topic.length > INPUT_LIMITS.topic) {
+    throw new DiscussionError('invalid_settings', `주제는 1~${INPUT_LIMITS.topic}자여야 합니다`);
+  }
+  if ((input.context ?? '').length > INPUT_LIMITS.context) {
+    throw new DiscussionError('invalid_settings', `배경 설명은 ${INPUT_LIMITS.context}자까지입니다`);
+  }
   const mode = input.mode ?? 'parallel';
   if (mode === 'parallel') {
     const max = input.max_rounds ?? 5;
@@ -211,17 +248,7 @@ export function discussionsFor(db: Db, userId: string) {
       return db.tx(async (q) => {
         const user = await q.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
         if (!user.rows[0]) throw new DiscussionError('not_found', '사용자가 없습니다');
-        const { rows } = await q.query<{ active: number; stored: number; bytes: number }>(
-          `SELECT
-             (SELECT count(*) FROM discussions WHERE owner_id = $1 AND status = 'active')::int AS active,
-             (SELECT count(*) FROM discussions WHERE owner_id = $1)::int AS stored,
-             ((SELECT coalesce(sum(octet_length(topic) + octet_length(context)), 0) FROM discussions WHERE owner_id = $1)
-              + (SELECT coalesce(sum(octet_length(t.content) + coalesce(octet_length(t.proposal), 0)
-                   + (SELECT coalesce(sum(octet_length(x)), 0) FROM jsonb_array_elements_text(t.open_issues) x)), 0)
-                 FROM turns t JOIN discussions d ON d.id = t.discussion_id WHERE d.owner_id = $1))::float8 AS bytes`,
-          [userId],
-        );
-        const usage = rows[0];
+        const usage = await usageOf(q, userId);
         const added = Buffer.byteLength(input.topic) + Buffer.byteLength(context);
         if (usage.active >= CREATE_LIMITS.active) {
           throw new DiscussionError('limit_exceeded', `진행 중인 토론은 ${CREATE_LIMITS.active}개까지입니다`);
@@ -229,7 +256,7 @@ export function discussionsFor(db: Db, userId: string) {
         if (usage.stored >= CREATE_LIMITS.stored || usage.bytes + added > CREATE_LIMITS.bytes) {
           throw new DiscussionError('limit_exceeded', '보관 한도(50개·5MB)에 도달했습니다. 웹에서 종료된 토론을 삭제하세요');
         }
-        if (!(await hitRateLimit(q, `discussion-create:${userId}`, 24 * 60 * 60, CREATE_LIMITS.perDay))) {
+        if (!(await hitRateLimit(q, createKey(userId), DAY_SECONDS, CREATE_LIMITS.perDay))) {
           throw new DiscussionError('limit_exceeded', `토론 생성은 하루 ${CREATE_LIMITS.perDay}개까지입니다`);
         }
         const created = await q.query<Discussion>(
@@ -238,6 +265,46 @@ export function discussionsFor(db: Db, userId: string) {
           [randomBytes(12).toString('base64url'), userId, input.topic, context, mode, max, min],
         );
         return created.rows[0];
+      });
+    },
+
+    // 최근 수정 순
+    async list(): Promise<Discussion[]> {
+      const { rows } = await db.query<Discussion>(
+        `SELECT ${DISCUSSION_COLS} FROM discussions WHERE owner_id = $1 ORDER BY updated_at DESC, id`,
+        [userId],
+      );
+      return rows;
+    },
+
+    usage: () => usageOf(db, userId),
+
+    // 계정 내보내기용: 모든 토론과 답변
+    async all(): Promise<{ discussion: Discussion; turns: Turn[] }[]> {
+      const list = await this.list();
+      return Promise.all(list.map(async (discussion) => ({ discussion, turns: await turnsOf(db, discussion.id) })));
+    },
+
+    // 진행 중인 토론을 수동 종료한다
+    async close(id: string): Promise<Discussion> {
+      return db.tx(async (q) => {
+        const d = await lockOwned(q, id);
+        if (d.status !== 'active') throw new DiscussionError('ended', '이미 종료된 토론입니다');
+        const { rows } = await q.query<Discussion>(
+          `UPDATE discussions SET status = 'closed', ended_at = now(), updated_at = now()
+           WHERE id = $1 AND owner_id = $2 RETURNING ${DISCUSSION_COLS}`,
+          [id, userId],
+        );
+        return rows[0];
+      });
+    },
+
+    // 종료된 토론만 답변까지 함께 지운다(turns는 ON DELETE CASCADE). 진행 중이면 먼저 종료해야 한다.
+    async remove(id: string): Promise<void> {
+      await db.tx(async (q) => {
+        const d = await lockOwned(q, id);
+        if (d.status === 'active') throw new DiscussionError('not_ended', '진행 중인 토론은 먼저 종료해야 삭제할 수 있습니다');
+        await q.query(`DELETE FROM discussions WHERE id = $1 AND owner_id = $2`, [id, userId]);
       });
     },
 

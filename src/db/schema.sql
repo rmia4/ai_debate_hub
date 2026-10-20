@@ -103,3 +103,11 @@ CREATE TABLE IF NOT EXISTS turns (
   created_at           timestamptz NOT NULL DEFAULT now(),
   UNIQUE (discussion_id, round, participant)
 );
+
+-- 하루 1회 정리 작업의 실행 결과. 운영자 화면에 표시한다
+CREATE TABLE IF NOT EXISTS cleanup_runs (
+  id       bigserial PRIMARY KEY,
+  ran_at   timestamptz NOT NULL DEFAULT now(),
+  deleted  jsonb NOT NULL DEFAULT '{}',
+  error    text
+);

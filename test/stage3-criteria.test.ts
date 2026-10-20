@@ -297,11 +297,11 @@ describe('입력 제한과 생성 한도', () => {
     expect(await turnCount(id)).toBe(0);
   });
 
-  it('도구 설명과 지시문에 "쉽게 동의하지 말고 근거를 제시할 것"이 들어 있다', async () => {
+  it('도구 설명에 "쉽게 동의하지 말고 근거를 제시할 것", 지시문에 "쉽게 동의하지 않는다"가 들어 있다', async () => {
     const u = await pair();
     const id = await start(u.claude);
     const r = await u.claude('start_discussion', { topic: '지시문 확인' });
-    expect(r.data.instructions.claude).toContain('쉽게 동의하지 말고 근거를 제시할 것');
+    expect(r.data.instructions.claude).toContain('쉽게 동의하지 않는다');
     expect(r.data.instructions.codex).toContain(r.data.discussion_id);
     const state = (await u.claude('get_state', { discussion_id: id })).data;
     expect(state.guide).toContain('독립 답변');
