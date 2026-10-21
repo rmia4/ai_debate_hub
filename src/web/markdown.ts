@@ -1,8 +1,8 @@
 import { marked } from 'marked';
 import sanitizeHtml from 'sanitize-html';
-import type { Discussion, Reference, Turn } from '../db/discussions.js';
+import { finalCrossing, type Discussion, type Reference, type Turn } from '../db/discussions.js';
 import type { Background, Project } from '../db/projects.js';
-import { PARTICIPANT_NAME } from '../instructions.js';
+import { crossingText, PARTICIPANT_NAME } from '../instructions.js';
 
 // AI 본문은 외부 입력이다. marked로 변환한 뒤 sanitize-html로 허용 태그·링크 프로토콜(http·https·mailto)만 남긴다.
 export function renderMarkdown(src: string): string {
@@ -78,5 +78,7 @@ export function discussionMarkdown(d: Discussion, turns: Turn[], refs: Reference
   const agreed = turns.find((t) => t.id === d.agreed_proposal_id);
   lines.push('## 결론', '', STATUS_LABEL[d.status], '');
   if (agreed?.proposal) lines.push(agreed.proposal, '');
+  const crossing = finalCrossing(d, turns);
+  if (crossing) lines.push(crossingText(crossing), '');
   return lines.join('\n');
 }

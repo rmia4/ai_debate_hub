@@ -166,6 +166,30 @@ const refsOf = async (q: Queryable, discussionId: string) =>
 // 순차 방식의 현재 합의안: 가장 최근 proposal
 export const currentProposal = (turns: Turn[]) => turns.findLast((t) => t.proposal !== null);
 
+// 동시 방식: 그 라운드에 양쪽이 서로 다른 안에 agree했으면 자리별 동의 대상을 돌려준다
+export function crossedAgreement(turns: Turn[], round: number): Record<Participant, string> | null {
+  const [a, b] = PARTICIPANTS.map((p) => turns.find((t) => t.round === round && t.participant === p));
+  if (a?.agreement !== 'agree' || b?.agreement !== 'agree' || a.accepted_proposal_id === b.accepted_proposal_id) return null;
+  return { A: a.accepted_proposal_id!, B: b.accepted_proposal_id! };
+}
+
+// 직전 완료 라운드의 엇갈림에서 고를 안. 완료된 라운드의 답변만 넘겨야 양쪽에 같은 값이 나온다.
+// 양쪽 모두 agree한 이력이 있는 안을 우선하고, 같으면 ID가 작은 안(turns.id는 증가 시퀀스)을 고른다. 안을 작성한 것은 동의 이력으로 세지 않는다.
+export function recommendProposal(completed: Turn[]) {
+  const crossed = crossedAgreement(completed, Math.max(0, ...completed.map((t) => t.round)));
+  if (!crossed) return null;
+  const agreedByBoth = (id: string) =>
+    PARTICIPANTS.every((p) => completed.some((t) => t.participant === p && t.agreement === 'agree' && t.accepted_proposal_id === id));
+  const [low, high] = [crossed.A, crossed.B].sort((x, y) => (BigInt(x) < BigInt(y) ? -1 : 1));
+  const [lowBoth, highBoth] = [agreedByBoth(low), agreedByBoth(high)];
+  if (lowBoth !== highBoth) return { proposal_id: lowBoth ? low : high, crossed, reason: '두 안 중 양쪽 모두 agree한 이력이 있는 안입니다' };
+  return { proposal_id: low, crossed, reason: `두 안 모두 양쪽 동의 이력이 ${lowBoth ? '있어' : '없어'} ID가 작은 안을 골랐습니다` };
+}
+
+// 마지막 라운드에서 서로 다른 안에 agree한 채 max_reached로 끝났으면 그 동의 대상. 판정은 바꾸지 않고 표시에만 쓴다.
+export const finalCrossing = (d: Discussion, turns: Turn[]) =>
+  d.mode === 'parallel' && d.status === 'max_reached' ? crossedAgreement(turns, d.current_round) : null;
+
 function settingsOf(input: CreateInput) {
   if (!input.topic.trim() || input.topic.length > INPUT_LIMITS.topic) {
     throw new DiscussionError('invalid_settings', `주제는 1~${INPUT_LIMITS.topic}자여야 합니다`);

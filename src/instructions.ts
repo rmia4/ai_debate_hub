@@ -7,6 +7,8 @@ const PARALLEL_RULES = `[규칙]
 3. 결론을 제시할 때는 proposal에 최종안을 따로 적는다.
 4. 쉽게 동의하지 않는다. 동의할 때는 무엇이 납득되었는지 근거를 밝힌다.
 5. agree는 특정 합의안에만 할 수 있다. accepted_proposal_id에 동의하는 답변 ID를 넣는다. 상대가 내 안에 동의했다면 같은 ID를 지정해 합의를 확정한다.
+   - 직전 라운드에 양쪽 동의 ID가 엇갈려 get_state가 recommended_proposal_id를 주면, 그 안의 내용을 검토해 수용할 수 있을 때 그 ID를 먼저 고른다. 추천은 동의 의무가 아니다.
+   - 추천이 없으면 새로운 실질적 이견이 없는 한 기존에 동의한 ID를 바꾸지 않는다. 아직 동의한 안이 없으면 상대가 동의한 안을 검토한다.
 6. open_issues에는 남은 이견을 짧게 적고, 없으면 빈 배열로 둔다.
 7. 라운드 불일치 오류가 오면 get_state를 다시 호출한 뒤 작성한다.
 8. get_state가 토론 종료를 알리면 결과를 한 줄로 요약하고 더 제출하지 않는다.
@@ -23,6 +25,9 @@ const SEQUENTIAL_RULES = `[규칙]
 8. 확인되지 않은 사실은 추정이라고 표시한다.`;
 
 export const PARTICIPANT_NAME = { A: 'A석', B: 'B석' } as const;
+
+// 마지막 라운드 동의 대상이 엇갈린 채 끝난 토론의 표시 문구. get_summary·웹 결론·내보내기가 같은 문구를 쓴다.
+export const crossingText = (c: Record<Participant, string>) => `양쪽 동의 대상이 엇갈림: A→${c.A}, B→${c.B}`;
 
 export const rulesFor = (mode: Discussion['mode']) => (mode === 'parallel' ? PARALLEL_RULES : SEQUENTIAL_RULES);
 

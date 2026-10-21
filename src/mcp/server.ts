@@ -8,14 +8,16 @@ import {
   currentProposal,
   DiscussionError,
   discussionsFor,
+  finalCrossing,
   PARTICIPANTS,
+  recommendProposal,
   type Discussion,
   type Participant,
   type Reference,
   type Turn,
 } from '../db/discussions.js';
 import { PROJECT_INPUT_LIMITS, projectsFor, type Background } from '../db/projects.js';
-import { BACKGROUND_NOTICE, BACKGROUND_RULES, instructionFor, rulesFor, SERVER_INSTRUCTIONS } from '../instructions.js';
+import { BACKGROUND_NOTICE, BACKGROUND_RULES, crossingText, instructionFor, rulesFor, SERVER_INSTRUCTIONS } from '../instructions.js';
 import type { Caller } from './caller.js';
 
 const RULE = '쉽게 동의하지 말고 근거를 제시할 것.';
@@ -86,6 +88,15 @@ function guide(d: Discussion, turns: Turn[], me: Participant) {
   if (d.mode === 'parallel') {
     if (!mine) return '이번 라운드 제출을 마쳤습니다. 상대 제출을 기다리세요.';
     if (d.current_round === 1) return '라운드 1입니다. 상대 답변 없이 독립 답변을 submit하세요.';
+    const rec = recommendProposal(visibleTurns(d, turns));
+    if (rec) {
+      const id = rec.proposal_id;
+      return (
+        `직전 라운드에서 양쪽 동의 대상이 엇갈렸습니다(A→${rec.crossed.A}, B→${rec.crossed.B}). 추천 ID는 ${id}입니다. ${rec.reason}. ` +
+        `안 ${id}의 내용을 검토해 수정 없이 받아들일 수 있으면 accepted_proposal_id=${id}로 agree하고, 아니면 partial 또는 disagree와 구체적 쟁점을 open_issues에 적어 submit하세요. ` +
+        `양쪽이 이번 라운드에 ${id}에 동의하면 합의됩니다. 추천은 동의 의무가 아닙니다. ${RULE}`
+      );
+    }
     return `직전 라운드 답변과 합의 후보를 검토해 라운드 ${d.current_round} 답변을 submit하세요. ${RULE}`;
   }
   if (turns.length === 0) return '아직 아무도 시작하지 않았습니다. 먼저 submit하면 선공이 됩니다.';
@@ -147,6 +158,8 @@ function stateView(d: Discussion, turns: Turn[], me: Participant, refs: Referenc
       submitted: turns.some((t) => t.round === d.current_round && t.participant === me),
       previous_round: visible.filter((t) => t.round === lastRound).map((t) => formatTurn(d, t)),
       proposals: visible.filter((t) => t.proposal !== null).map(proposalOf),
+      // 직전 완료 라운드에서 양쪽 동의 ID가 엇갈렸을 때만 값이 있다. 완료된 라운드로만 계산해 양쪽에 같은 값이 나온다
+      recommended_proposal_id: d.status === 'active' ? (recommendProposal(visible)?.proposal_id ?? null) : null,
     };
   }
   const opponentLast = visible.findLast((t) => t.participant === opponentOf(me));
@@ -279,6 +292,7 @@ function buildServer(caller: Caller, db: Db): McpServer {
       run(async () => {
         const { discussion: d, turns, refs } = await repo.get(discussion_id);
         const agreed = agreedProposal(d, turns);
+        const crossing = finalCrossing(d, turns);
         const conclusion =
           d.status === 'agreed' ? '합의 완료' : d.status === 'max_reached' ? '최대 도달·합의 미확정' : d.status === 'closed' ? '수동 종료' : '진행 중';
         return json({
@@ -291,6 +305,7 @@ function buildServer(caller: Caller, db: Db): McpServer {
           turns: visibleTurns(d, turns).map((t) => formatTurn(d, t)),
           conclusion,
           agreed_proposal: agreed,
+          ...(crossing ? { crossed_agreement: crossingText(crossing) } : {}),
           ...projectFields(d, refs),
         });
       }),

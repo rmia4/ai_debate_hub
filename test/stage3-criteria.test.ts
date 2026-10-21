@@ -301,6 +301,123 @@ describe('동시 방식', () => {
   });
 });
 
+describe('동시 방식: 동의 대상이 엇갈렸을 때', () => {
+  const agree = (round: number, id: string) => ({ expected_round: round, agreement: 'agree', accepted_proposal_id: id });
+  const state = async (as: Tool, id: string) => (await as('get_state', { discussion_id: id })).data;
+  const recommended = async (u: Awaited<ReturnType<typeof pair>>, id: string) =>
+    [(await state(u.claude, id)).recommended_proposal_id, (await state(u.codex, id)).recommended_proposal_id];
+
+  it('세비체 사례: R4 종료 뒤 양쪽 추천이 같은 안이고, R5에 양쪽이 그 안에 동의하면 합의된다', async () => {
+    const u = await pair();
+    const id = await start(u.claude, { max_rounds: 5 });
+    await ok(u.claude, id, { expected_round: 1, proposal: '안 1' });
+    await ok(u.codex, id, { expected_round: 1, proposal: '안 2' });
+    const three = (await ok(u.claude, id, { expected_round: 2, agreement: 'partial', proposal: '안 3' })).submission.id;
+    await ok(u.codex, id, { expected_round: 2, agreement: 'partial' });
+    // R3: A→3, B는 새 안 6
+    await ok(u.claude, id, agree(3, three));
+    const six = (await ok(u.codex, id, { expected_round: 3, agreement: 'partial', proposal: '안 6' })).submission.id;
+    expect(await recommended(u, id)).toEqual([null, null]);
+    // R4: A→6, B→3. 3은 양쪽 동의 이력이 있고 6은 A만 있다
+    await ok(u.claude, id, agree(4, six));
+    await ok(u.codex, id, agree(4, three));
+    expect(await recommended(u, id)).toEqual([three, three]);
+    const guide = (await state(u.codex, id)).guide as string;
+    expect(guide).toContain(`A→${six}, B→${three}`);
+    expect(guide).toContain(`accepted_proposal_id=${three}로 agree`);
+    expect(guide).toContain('partial 또는 disagree');
+    expect(guide).toContain('양쪽 모두 agree한 이력');
+    expect(guide).not.toContain('확정');
+
+    await ok(u.claude, id, agree(5, three));
+    const end = await ok(u.codex, id, agree(5, three));
+    expect(end).toMatchObject({ status: 'agreed', current_round: 5, agreed_proposal: { proposal_id: three } });
+  });
+
+  it('양쪽 동의 이력이 없는 엇갈림에서도 양쪽에 같은 추천(ID가 작은 안)이 나온다', async () => {
+    const u = await pair();
+    const id = await start(u.claude);
+    // B가 먼저 제출해 B의 안이 ID가 작다
+    const b = (await ok(u.codex, id, { expected_round: 1, proposal: '안 B' })).submission.id;
+    const a = (await ok(u.claude, id, { expected_round: 1, proposal: '안 A' })).submission.id;
+    expect(BigInt(b)).toBeLessThan(BigInt(a));
+    await ok(u.claude, id, agree(2, b));
+    await ok(u.codex, id, agree(2, a));
+    expect(await recommended(u, id)).toEqual([b, b]);
+    expect((await state(u.claude, id)).guide).toContain('양쪽 동의 이력이 없어 ID가 작은 안');
+  });
+
+  it('두 안 모두 양쪽 동의 이력이 있으면 ID가 작은 안, 한쪽 안만 있으면 ID와 관계없이 그 안을 추천한다', async () => {
+    const both = await pair();
+    let id = await start(both.claude);
+    const a = (await ok(both.claude, id, { expected_round: 1, proposal: '안 A' })).submission.id;
+    const b = (await ok(both.codex, id, { expected_round: 1, proposal: '안 B' })).submission.id;
+    await ok(both.claude, id, agree(2, a));
+    await ok(both.codex, id, agree(2, b));
+    await ok(both.claude, id, agree(3, b));
+    await ok(both.codex, id, agree(3, a));
+    expect(await recommended(both, id)).toEqual([a, a]);
+    expect((await state(both.claude, id)).guide).toContain('양쪽 동의 이력이 있어 ID가 작은 안');
+
+    const one = await pair();
+    id = await start(one.claude);
+    const x = (await ok(one.claude, id, { expected_round: 1, proposal: '안 X' })).submission.id;
+    const y = (await ok(one.codex, id, { expected_round: 1, proposal: '안 Y' })).submission.id;
+    await ok(one.claude, id, agree(2, y));
+    await ok(one.codex, id, { expected_round: 2, agreement: 'partial' });
+    await ok(one.claude, id, agree(3, x));
+    await ok(one.codex, id, agree(3, y));
+    // y는 A(R2)·B(R3) 모두 동의한 이력이 있어 ID가 더 커도 추천된다
+    expect(BigInt(x)).toBeLessThan(BigInt(y));
+    expect(await recommended(one, id)).toEqual([y, y]);
+  });
+
+  it('현재 라운드에 한쪽이 제출한 전후로 추천 값이 바뀌지 않는다', async () => {
+    const u = await pair();
+    const id = await start(u.claude);
+    const a = (await ok(u.claude, id, { expected_round: 1, proposal: '안 A' })).submission.id;
+    const b = (await ok(u.codex, id, { expected_round: 1, proposal: '안 B' })).submission.id;
+    await ok(u.claude, id, agree(2, b));
+    await ok(u.codex, id, agree(2, a));
+    const before = await recommended(u, id);
+    expect(before).toEqual([a, a]);
+    await ok(u.claude, id, { expected_round: 3, agreement: 'partial', proposal: '안 C' });
+    expect(await recommended(u, id)).toEqual(before);
+  });
+
+  it('A가 X를 버리고 Y에 동의하면, 그 라운드에 B가 X에 동의해도 X로 자동 합의되지 않는다', async () => {
+    const u = await pair();
+    const id = await start(u.claude, { max_rounds: 4 });
+    const x = (await ok(u.claude, id, { expected_round: 1, proposal: '안 X' })).submission.id;
+    const y = (await ok(u.codex, id, { expected_round: 1, proposal: '안 Y' })).submission.id;
+    await ok(u.claude, id, agree(2, x));
+    await ok(u.codex, id, { expected_round: 2, agreement: 'partial' });
+    await ok(u.claude, id, agree(3, y));
+    const r = await ok(u.codex, id, agree(3, x));
+    expect(r).toMatchObject({ status: 'active', current_round: 4, agreed_proposal: null });
+    expect(await state(u.claude, id)).toMatchObject({ status: 'active', agreed_proposal: null });
+  });
+
+  it('엇갈림이 없으면 추천이 없고, 마지막 라운드 엇갈림은 상태를 바꾸지 않고 get_summary에 표시된다', async () => {
+    const u = await pair();
+    const id = await start(u.claude, { max_rounds: 2 });
+    const a = (await ok(u.claude, id, { expected_round: 1, proposal: '안 A' })).submission.id;
+    const b = (await ok(u.codex, id, { expected_round: 1, proposal: '안 B' })).submission.id;
+    expect(await recommended(u, id)).toEqual([null, null]);
+    await ok(u.claude, id, agree(2, b));
+    const end = await ok(u.codex, id, agree(2, a));
+    expect(end).toMatchObject({ status: 'max_reached', agreed_proposal: null });
+    expect(await recommended(u, id)).toEqual([null, null]);
+    const summary = (await u.claude('get_summary', { discussion_id: id })).data;
+    expect(summary).toMatchObject({ status: 'max_reached', agreed_proposal: null, crossed_agreement: `양쪽 동의 대상이 엇갈림: A→${b}, B→${a}` });
+
+    // 엇갈림 없이 끝난 토론에는 표시하지 않는다
+    const plain = await start(u.claude, { max_rounds: 2 });
+    for (const round of [1, 2]) await Promise.all([ok(u.claude, plain, { expected_round: round }), ok(u.codex, plain, { expected_round: round })]);
+    expect((await u.claude('get_summary', { discussion_id: plain })).data).not.toHaveProperty('crossed_agreement');
+  });
+});
+
 describe('순차 방식', () => {
   it('아무도 시작하지 않았으면 선공 안내를 하고, 먼저 제출한 쪽이 선공이 된다', async () => {
     const u = await pair();

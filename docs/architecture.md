@@ -144,7 +144,7 @@ MCP 연결(OAuth 2.1) 설계는 [인증·보안](auth-security.md)에 있습니�
 
 | 컬럼 | 타입 | 설명 |
 | --- | --- | --- |
-| `id` | bigserial (PK) | 답변 ID. `proposal`이 있으면 합의안 ID로 사용 |
+| `id` | bigserial (PK) | 답변 ID. `proposal`이 있으면 합의안 ID로 사용. 증가 시퀀스라 동의 대상이 엇갈렸을 때 추천 순서의 기준으로도 씀 |
 | `discussion_id` | text (FK) | 소속 토론 |
 | `round` | int | 라운드 번호(동시) 또는 턴 번호(순차) |
 | `participant` | text | 자리 `A` / `B` (도구 입력 `seat`으로 받음) |
