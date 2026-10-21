@@ -5,7 +5,7 @@ import { listConnections, revokeConnection } from '../oauth/connections.js';
 import { loginUrl } from './auth-routes.js';
 import { discussionPagesRouter } from './discussion-pages.js';
 import { projectPagesRouter } from './project-pages.js';
-import { esc, logoutForm, page, suspendedPage } from './html.js';
+import { appNav, esc, page, suspendedPage } from './html.js';
 import { checkCsrf, loadSession, type WebSession } from './session.js';
 
 // Codex 플러그인 마켓플레이스 값. 플러그인 패키지는 이 저장소의 CODEX_PLUGIN_REF 브랜치에 둔다.
@@ -68,9 +68,9 @@ export function pagesRouter(config: Config, db: Db) {
       res.send(
         page(
           'AI Debate Hub',
-          `<header class="topbar"><a class="brand" href="/">ai-debate-hub</a><nav><a href="/terms">이용약관</a><a href="/privacy">개인정보</a>${
-            web ? `<a href="/app">토론 목록</a>${logoutForm(web.csrf)}` : '<a href="/login">로그인</a>'
-          }</nav></header>
+          `<header class="topbar"><a class="brand" href="/">ai-debate-hub</a>${
+            web ? appNav(web) : '<nav><a href="/terms">이용약관</a><a href="/privacy">개인정보</a><a href="/login">로그인</a></nav>'
+          }</header>
           <main>
             <section class="split">
               <div>
