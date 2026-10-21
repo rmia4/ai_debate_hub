@@ -35,6 +35,8 @@ export function createProvider(config: Config, db: Db): Provider {
       jwks: '/jwks',
     },
     responseTypes: ['code'],
+    // 서명 키는 ES256 하나뿐이다(scripts/gen-keys.ts). 기본값 RS256이면 모든 클라이언트 등록이 invalid_client_metadata로 거부된다.
+    clientDefaults: { id_token_signed_response_alg: 'ES256' },
     scopes: [MCP_SCOPE, 'offline_access'],
     claims: { openid: ['sub'] },
     // 정지된 사용자, 폐기·만료된 연결이면 계정을 찾지 못한 것으로 보고 토큰을 발급하지 않는다(invalid_grant).
