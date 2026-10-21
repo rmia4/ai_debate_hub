@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Db } from './db.js';
+import { usageBytesSql } from './discussions.js';
 
 export type SocialProviderName = 'github' | 'google';
 
@@ -86,10 +87,7 @@ export async function listUsersWithUsage(db: Db) {
   const { rows } = await db.query<User & { discussions: number; bytes: number }>(
     `SELECT u.*,
        (SELECT count(*) FROM discussions d WHERE d.owner_id = u.id)::int AS discussions,
-       ((SELECT coalesce(sum(octet_length(topic) + octet_length(context)), 0) FROM discussions d WHERE d.owner_id = u.id)
-        + (SELECT coalesce(sum(octet_length(t.content) + coalesce(octet_length(t.proposal), 0)
-             + (SELECT coalesce(sum(octet_length(x)), 0) FROM jsonb_array_elements_text(t.open_issues) x)), 0)
-           FROM turns t JOIN discussions d ON d.id = t.discussion_id WHERE d.owner_id = u.id))::float8 AS bytes
+       ${usageBytesSql('u.id')} AS bytes
      FROM users u ORDER BY u.created_at`,
   );
   return rows;

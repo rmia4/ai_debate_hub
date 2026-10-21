@@ -67,20 +67,23 @@ MCP 연결(OAuth 2.1) 설계는 [인증·보안](auth-security.md)에 있습니�
 | 토론방 생성 | 사용자당 하루 20개 |
 | 제출 | 사용자 단위 분당 10회, 하루 300회. 토큰 갱신으로 우회되지 않도록 사용자·연결 단위로 계산 |
 | 입력 길이 | 주제 200자, 배경 설명 2,000자, 본문 8,000자, 합의안 4,000자, `open_issues` 10개×200자 |
+| 프로젝트 | 사용자당 10개. 이름 100자, 설명 2,000자 |
+| 배경 항목 | 프로젝트당 30개(삭제되지 않은 항목만 셈). 제목 100자, 요약 300자, text 본문 50,000자, 위치 2,000자. 추가·수정은 하루 100회 |
 | 보존 기간 | 종료 후 180일이 지난 토론방은 자동 삭제 (삭제 30일 전 화면 안내) |
 
 ### 한도 계산과 동시 요청
 
 - 웹과 MCP의 토론 생성은 같은 저장소 함수를 사용합니다. 생성 트랜잭션에서 해당 `users` 행을 `SELECT … FOR UPDATE`로 잠근 뒤 진행 중 개수·보관 개수·텍스트 용량을 검사하고 생성합니다. 생성으로 5개·50개를 넘기거나 주제·배경 추가로 5MB를 넘기면 거부합니다.
-- 텍스트 용량은 토론의 `topic`·`context`와 모든 답변의 `content`·`proposal`·`open_issues` 문자열을 UTF-8로 인코딩한 바이트 수의 합계입니다. 글자 수, DB 행·인덱스 용량, JSON 구분자 크기는 이 한도와 구분합니다.
+- 텍스트 용량은 토론의 `topic`·`context`, 모든 답변의 `content`·`proposal`·`open_issues` 문자열, 배경 항목의 제목·요약·본문·위치를 UTF-8로 인코딩한 바이트 수의 합계입니다. 소프트 삭제된 배경도 저장 공간을 쓰므로 셉니다. 계정 화면(`usageOf`)과 운영자 화면(`listUsersWithUsage`)은 같은 SQL 식(`usageBytesSql`)을 씁니다. 글자 수, DB 행·인덱스 용량, JSON 구분자 크기는 이 한도와 구분합니다.
 - 용량은 생성 시점에만 검사합니다. 이미 진행 중인 토론은 5MB를 넘어도 정해진 최대 라운드·턴까지 제출할 수 있습니다. 별도의 엄격한 제출별 용량 잠금은 두지 않습니다.
 - 한 토론의 제출은 동시 방식 최대 10라운드×2명, 순차 방식 최대 20턴으로 모두 최대 20건입니다. 제출 텍스트는 최대 `20 × (8,000 + 4,000 + 10 × 200) = 280,000자`이고 주제·배경은 별도입니다. 바이트 수는 문자에 따라 다릅니다. 이 초과 허용량은 진행 중 최대 5개에 누적될 수 있으므로 5MB는 사용자별 DB 사용량의 절대 상한이 아닙니다.
+- 프로젝트·배경을 쓰는 모든 작업(프로젝트 생성·수정·삭제, 배경 추가·수정·삭제)과 프로젝트 토론 생성은 트랜잭션 첫 단계에서 같은 `users` 행을 `FOR UPDATE`로 잠급니다. 그래서 개수 한도, 배경 저장 시점의 5MB 검사(`현재 용량 + 늘어나는 바이트`), "진행 중인 토론이 참조하면 삭제 거부" 검사가 서로 경쟁하지 않고, 잠금 순서가 하나라 교착도 없습니다. 배경 수정의 `revision` 검사도 이 잠금 안에서 합니다.
 - 횟수 제한은 제한 키·시간 구간별 원자적 UPSERT로 증가시킵니다([남용 방지](auth-security.md#남용-방지)).
 - 사용자는 종료된 자기 토론방을 삭제해 보관 개수·용량을 줄일 수 있습니다. 삭제는 관련 답변까지 한 트랜잭션으로 처리하고 완료 후 생성 한도를 다시 계산합니다.
 
 **정리 작업:** 하루 1회 예약 작업(Vercel Cron)이 다음을 삭제합니다. 실행 결과(삭제 건수, 실패)는 운영자 화면에 표시합니다.
 
-1. 보존 기간이 지난 토론방
+1. 보존 기간이 지난 토론방, 소프트 삭제됐고 더는 참조하는 토론이 없는 배경 항목
 2. 만료된 인가 요청·코드·세션
 3. 만료 후 30일 지난 토큰 이력
 4. 오래된 횟수 제한 기록
@@ -98,6 +101,7 @@ MCP 연결(OAuth 2.1) 설계는 [인증·보안](auth-security.md)에 있습니�
 - 회원: `users`, `accounts`, `sessions`, `rate_limits`
 - OAuth: `oauth_clients`, `oauth_auth_requests`, `oauth_connections`, `oauth_codes`, `oauth_tokens`
 - 토론: `discussions`, `turns`
+- 프로젝트: `projects`, `project_backgrounds`, `discussion_backgrounds`
 
 회원 인증 라이브러리를 쓰면 `users`·`accounts`·`sessions`(OAuth 제공자 기능을 쓰면 OAuth 테이블도)는 라이브러리 스키마를 따르고, `participant` 같은 아래 컬럼은 추가 필드로 붙입니다.
 
@@ -123,6 +127,7 @@ MCP 연결(OAuth 2.1) 설계는 [인증·보안](auth-security.md)에 있습니�
 | --- | --- | --- |
 | `id` | text (PK) | 추측하기 어려운 랜덤 ID (12자 이상) |
 | `owner_id` | `users.id`와 같은 타입 (FK) | 토론방 소유자. 모든 조회 조건에 포함 |
+| `project_id` | text (FK, NULL 허용) | 프로젝트 토론이면 그 프로젝트. 프로젝트 삭제 시 함께 삭제 |
 | `topic` | text | 토론 주제 |
 | `context` | text | 배경 설명·제약 조건 (선택) |
 | `mode` | text | `parallel`(동시) / `sequential`(순차) |
@@ -153,3 +158,15 @@ MCP 연결(OAuth 2.1) 설계는 [인증·보안](auth-security.md)에 있습니�
 | `created_at` | timestamptz | 제출 시각 |
 
 **제약:** `(discussion_id, round, participant)` 유니크 제약을 두 방식 공통으로 둡니다. 순차 방식의 "한 턴에 한 명" 제한은 토론방 행 잠금과 차례 검증으로 보장합니다. `(discussion_id, round)` 제약은 동시 방식의 두 번째 제출까지 막으므로 두지 않습니다.
+
+### 프로젝트 테이블
+
+프로젝트·배경 접근은 `src/db/projects.ts`의 `projectsFor` 한 곳으로만 하며, 모든 쿼리에 `owner_id` 조건을 붙입니다. 남의 프로젝트·항목은 없는 것과 똑같이 "존재하지 않음"입니다.
+
+| 테이블 | 주요 컬럼 | 설명 |
+| --- | --- | --- |
+| `projects` | `id`(랜덤 12자 이상), `owner_id`, `name`, `description`, `created_at`, `updated_at` | 여러 토론이 함께 참조하는 배경 항목의 묶음. 진행 중인 토론이 있으면 삭제를 거부하고, 삭제하면 종료된 토론·배경 항목이 함께 지워짐 |
+| `project_backgrounds` | `id`, `project_id`, `kind`(`text`/`link`/`file`), `title`, `summary`, `body`(text만), `location`(link는 URL, file은 절대경로), `revision`, `updated_by`(`웹` 또는 연결 앱 이름), `deleted_at`, `created_at`, `updated_at` | 전역 배경 항목. 종류별 필드 규칙을 DB `CHECK`로 강제(`text`는 `location`이 NULL, `link`·`file`은 `body`가 빈 문자열) |
+| `discussion_backgrounds` | `discussion_id`, `background_id`, `revision_at_start` | 토론이 참조하는 항목과 시작 시점의 revision. PK `(discussion_id, background_id)` |
+
+**배경 삭제:** 진행 중인 토론이 참조하면 거부합니다. 참조가 없으면 바로 지우고, 종료된 토론만 참조하면 `deleted_at`만 찍습니다(소프트 삭제). 소프트 삭제된 항목은 목록·조회·수정·새 토론 참조에서 없는 항목이고, 과거 토론의 기록에는 "삭제됨"으로 남습니다. 참조하던 토론이 모두 사라지면 정리 작업이 지웁니다. 그래서 `discussion_backgrounds`의 `ON DELETE CASCADE`는 프로젝트 삭제와 회원 탈퇴 때만 실행됩니다.

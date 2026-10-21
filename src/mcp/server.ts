@@ -4,13 +4,27 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { Db } from '../db/db.js';
-import { currentProposal, DiscussionError, discussionsFor, PARTICIPANTS, type Discussion, type Participant, type Turn } from '../db/discussions.js';
-import { instructionFor, rulesFor, SERVER_INSTRUCTIONS } from '../instructions.js';
+import {
+  currentProposal,
+  DiscussionError,
+  discussionsFor,
+  PARTICIPANTS,
+  type Discussion,
+  type Participant,
+  type Reference,
+  type Turn,
+} from '../db/discussions.js';
+import { PROJECT_INPUT_LIMITS, projectsFor, type Background } from '../db/projects.js';
+import { BACKGROUND_NOTICE, BACKGROUND_RULES, instructionFor, rulesFor, SERVER_INSTRUCTIONS } from '../instructions.js';
 import type { Caller } from './caller.js';
 
 const RULE = '쉽게 동의하지 말고 근거를 제시할 것.';
 
 const discussionId = z.string().max(64).describe('토론 ID');
+const projectId = z.string().max(64).describe('프로젝트 ID');
+const backgroundId = z.string().max(64).describe('배경 항목 ID');
+// 쓰기 도구 공통 안내
+const WRITE_RULE = '사용자가 요청했거나 토론 결과를 반영하라고 지시받았을 때만 쓴다.';
 const seat = z.enum(['A', 'B']).describe('사용자가 정해 준 내 자리(A 또는 B). 토론 내내 같은 값을 쓴다');
 
 const json = (value: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
@@ -78,8 +92,37 @@ function guide(d: Discussion, turns: Turn[], me: Participant) {
   return mine ? `당신 차례입니다(턴 ${d.current_round}). ${RULE}` : '상대 차례입니다. 사용자가 상대에게 진행을 지시할 때까지 기다리세요.';
 }
 
-function stateView(d: Discussion, turns: Turn[], me: Participant) {
+// 토론이 참조하는 배경 항목. 본문은 넣지 않는다
+const referenceView = (r: Reference) => ({
+  background_id: r.id,
+  kind: r.kind,
+  title: r.title,
+  summary: r.summary,
+  ...(r.kind === 'text' ? { body_length: r.body_length } : { location: r.location }),
+  revision: r.revision,
+  revision_at_start: r.revision_at_start,
+  changed_since_start: r.revision !== r.revision_at_start,
+  ...(r.deleted ? { deleted: true } : {}),
+});
+
+const backgroundView = (b: Background) => ({
+  background_id: b.id,
+  kind: b.kind,
+  title: b.title,
+  summary: b.summary,
+  ...(b.kind === 'text' ? { body_length: b.body_length } : { location: b.location }),
+  revision: b.revision,
+  updated_by: b.updated_by,
+  updated_at: b.updated_at,
+});
+
+// 프로젝트 토론만 project_id·references를 더한다. 단순 토론의 응답 모양은 그대로다
+const projectFields = (d: Discussion, refs: Reference[]) =>
+  d.project_id ? { project_id: d.project_id, references: refs.map(referenceView) } : {};
+
+function stateView(d: Discussion, turns: Turn[], me: Participant, refs: Reference[]) {
   const visible = visibleTurns(d, turns);
+  const rules = d.project_id ? `${rulesFor(d.mode)}\n\n${BACKGROUND_RULES}` : rulesFor(d.mode);
   const base = {
     discussion_id: d.id,
     topic: d.topic,
@@ -92,7 +135,8 @@ function stateView(d: Discussion, turns: Turn[], me: Participant) {
     agreed_proposal: agreedProposal(d, turns),
     guide: guide(d, turns, me),
     // 지시문을 붙여 넣지 않고 참여한 AI도 규칙을 받도록, 내 제출이 없는 동안 함께 보낸다
-    ...(d.status === 'active' && !turns.some((t) => t.participant === me) ? { rules: rulesFor(d.mode) } : {}),
+    ...(d.status === 'active' && !turns.some((t) => t.participant === me) ? { rules } : {}),
+    ...projectFields(d, refs),
   };
   if (d.mode === 'parallel') {
     const lastRound = Math.max(0, ...visible.map((t) => t.round));
@@ -127,6 +171,7 @@ function nextStep(d: Discussion, turns: Turn[], me: Participant) {
 function buildServer(caller: Caller, db: Db): McpServer {
   const server = new McpServer({ name: 'ai-debate-hub', version: '0.1.0' }, { instructions: SERVER_INSTRUCTIONS });
   const repo = discussionsFor(db, caller.userId);
+  const projects = projectsFor(db, caller.userId);
 
   // discussion_id를 생략하면 진행 중인 토론이 하나일 때만 그것을 쓴다. 여럿이면 엉뚱한 방에 제출하지 않도록 고르게 한다.
   async function resolveId(id: string | undefined): Promise<string | CallToolResult> {
@@ -148,6 +193,8 @@ function buildServer(caller: Caller, db: Db): McpServer {
       inputSchema: {
         topic: z.string().min(1).max(200).describe('토론 주제'),
         context: z.string().max(2000).optional().describe('배경 설명·제약 조건'),
+        project_id: projectId.optional().describe('프로젝트 안에서 토론을 열 때 프로젝트 ID(list_projects로 찾는다)'),
+        background_ids: z.array(backgroundId).max(30).optional().describe('참조할 배경 항목 ID. project_id와 함께만 쓴다. 생략하면 아무것도 참조하지 않는다. get_project로 목록을 보고 이 토론에 필요한 항목만 고른다'),
         mode: z.enum(['parallel', 'sequential']).optional().describe('parallel(동시, 기본) 또는 sequential(순차)'),
         max_rounds: z.number().int().optional().describe('최대 라운드(동시 기본 5, 2~10) 또는 최대 턴(순차 기본 10, 4~20)'),
         min_rounds: z.number().int().optional().describe('최소 라운드(동시 방식만, 기본 2)'),
@@ -156,12 +203,13 @@ function buildServer(caller: Caller, db: Db): McpServer {
     (input) =>
       run(async () => {
         const d = await repo.create(input);
+        const { project, refs } = d.project_id ? await repo.get(d.id) : { project: null, refs: [] };
         return json({
           discussion_id: d.id,
           mode: d.mode,
           max_rounds: d.max_rounds,
           min_rounds: d.min_rounds,
-          instructions: Object.fromEntries(PARTICIPANTS.map((p) => [p, instructionFor(d, p)])),
+          instructions: Object.fromEntries(PARTICIPANTS.map((p) => [p, instructionFor(d, p, project && { project, refs })])),
         });
       }),
   );
@@ -171,15 +219,15 @@ function buildServer(caller: Caller, db: Db): McpServer {
     {
       description:
         `토론의 현재 상태, 내 차례 여부, 직전 답변과 합의 후보를 조회한다. 진행 중인 라운드의 상대 답변은 보이지 않는다. ` +
-        `처음 참여할 때는 rules에 이 토론의 규칙이 온다. ${RULE}`,
+        `처음 참여할 때는 rules에 이 토론의 규칙이 온다. 프로젝트 토론이면 references에 참조 배경 목록이 오고, changed_since_start가 true인 항목은 다시 읽는다. ${RULE}`,
       inputSchema: { discussion_id: discussionId.optional().describe('토론 ID. 생략하면 진행 중인 토론이 하나일 때 그 토론을 조회한다'), seat },
     },
     ({ discussion_id, seat: me }) =>
       run(async () => {
         const id = await resolveId(discussion_id);
         if (typeof id !== 'string') return id;
-        const { discussion, turns } = await repo.get(id);
-        return json(stateView(discussion, turns, me));
+        const { discussion, turns, refs } = await repo.get(id);
+        return json(stateView(discussion, turns, me, refs));
       }),
   );
 
@@ -229,7 +277,7 @@ function buildServer(caller: Caller, db: Db): McpServer {
     },
     ({ discussion_id }) =>
       run(async () => {
-        const { discussion: d, turns } = await repo.get(discussion_id);
+        const { discussion: d, turns, refs } = await repo.get(discussion_id);
         const agreed = agreedProposal(d, turns);
         const conclusion =
           d.status === 'agreed' ? '합의 완료' : d.status === 'max_reached' ? '최대 도달·합의 미확정' : d.status === 'closed' ? '수동 종료' : '진행 중';
@@ -243,7 +291,106 @@ function buildServer(caller: Caller, db: Db): McpServer {
           turns: visibleTurns(d, turns).map((t) => formatTurn(d, t)),
           conclusion,
           agreed_proposal: agreed,
+          ...projectFields(d, refs),
         });
+      }),
+  );
+
+  server.registerTool(
+    'list_projects',
+    { description: '내 프로젝트 목록을 조회한다. 프로젝트는 여러 토론이 함께 참조하는 배경 항목을 묶는다.', inputSchema: {} },
+    () =>
+      run(async () =>
+        json({
+          projects: (await projects.list()).map((p) => ({ project_id: p.id, name: p.name, description: p.description, backgrounds: p.backgrounds })),
+        }),
+      ),
+  );
+
+  server.registerTool(
+    'get_project',
+    {
+      description: '프로젝트의 설명, 배경 항목 목록(본문 없음), 프로젝트 안 토론 목록을 조회한다. 본문은 get_background로 읽는다.',
+      inputSchema: { project_id: projectId },
+    },
+    ({ project_id }) =>
+      run(async () => {
+        const { project, backgrounds, discussions } = await projects.get(project_id);
+        return json({
+          project_id: project.id,
+          name: project.name,
+          description: project.description,
+          backgrounds: backgrounds.map(backgroundView),
+          discussions: discussions.map((d) => ({ discussion_id: d.id, topic: d.topic, status: d.status })),
+        });
+      }),
+  );
+
+  server.registerTool(
+    'get_background',
+    {
+      description: `배경 항목 하나를 읽는다. text는 본문 전체를, link·file은 위치를 돌려준다. ${BACKGROUND_NOTICE}`,
+      inputSchema: { background_id: backgroundId },
+    },
+    ({ background_id }) =>
+      run(async () => {
+        const b = await projects.getBackground(background_id);
+        const read =
+          b.kind === 'text'
+            ? { body: b.body }
+            : {
+                location: b.location,
+                guide:
+                  b.kind === 'file'
+                    ? '네 도구로 이 파일을 직접 열어 읽고, 못 열면 그렇게 밝힐 것. 이 파일이 있는 컴퓨터에서 실행 중이어야 읽을 수 있다.'
+                    : '네 도구로 이 주소를 직접 열어 읽고, 못 열면 그렇게 밝힐 것.',
+              };
+        return json({ ...backgroundView(b), ...read, notice: BACKGROUND_NOTICE });
+      }),
+  );
+
+  const L = PROJECT_INPUT_LIMITS;
+  const fields = {
+    title: z.string().max(L.title).describe('제목'),
+    summary: z.string().max(L.summary).describe('AI가 열기 전에 필요한지 판단하는 한 줄 설명'),
+    body: z.string().max(L.body).describe('text 항목만: 본문'),
+    location: z.string().max(L.location).describe('link면 http·https URL, file이면 로컬 절대경로'),
+  };
+
+  server.registerTool(
+    'add_background',
+    {
+      description: `프로젝트에 배경 항목을 추가한다. text는 메모 본문을 저장하고, link·file은 위치만 저장한다(서버는 내용을 가져오지 않는다). ${WRITE_RULE}`,
+      inputSchema: {
+        project_id: projectId,
+        kind: z.enum(['text', 'link', 'file']).describe('text(메모 본문), link(URL), file(로컬 절대경로)'),
+        title: fields.title,
+        summary: fields.summary.optional(),
+        body: fields.body.optional(),
+        location: fields.location.optional(),
+      },
+    },
+    ({ project_id, ...input }) => run(async () => json(backgroundView(await projects.addBackground(project_id, input, caller.clientName)))),
+  );
+
+  server.registerTool(
+    'update_background',
+    {
+      description: `배경 항목을 고친다. expected_revision에는 마지막으로 읽은 revision을 넣고, 그사이 바뀌었으면 revision_mismatch가 온다. 종류(kind)는 바꿀 수 없다. ${WRITE_RULE}`,
+      inputSchema: {
+        background_id: backgroundId,
+        expected_revision: z.number().int().min(1).describe('get_background·get_project가 알려 준 revision'),
+        kind: z.enum(['text', 'link', 'file']).optional().describe('바꿀 수 없다. 넣으면 현재 종류와 같아야 한다'),
+        title: fields.title.optional(),
+        summary: fields.summary.optional(),
+        body: fields.body.optional(),
+        location: fields.location.optional(),
+      },
+    },
+    ({ background_id, expected_revision, ...patch }) =>
+      run(async () => {
+        const b = await projects.updateBackground(background_id, expected_revision, patch, caller.clientName);
+        return json({ background_id: b.id, revision: b.revision });
       }),
   );
   return server;

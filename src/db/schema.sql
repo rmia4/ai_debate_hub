@@ -125,3 +125,46 @@ CREATE TABLE IF NOT EXISTS cleanup_runs (
   deleted  jsonb NOT NULL DEFAULT '{}',
   error    text
 );
+
+-- 프로젝트. 여러 토론이 함께 참조하는 전역 배경 항목을 묶는다. 모든 접근은 src/db/projects.ts를 거친다
+CREATE TABLE IF NOT EXISTS projects (
+  id          text PRIMARY KEY CHECK (length(id) >= 12),
+  owner_id    text NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  name        text NOT NULL,
+  description text NOT NULL DEFAULT '',
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS projects_owner_id ON projects (owner_id);
+
+-- 전역 배경 항목. text는 본문을, link·file은 위치(URL·절대경로)만 저장한다. 서버는 위치의 내용을 가져오지 않는다.
+-- 종료된 토론이 참조하는 항목은 deleted_at만 찍고(소프트 삭제), 참조가 사라지면 정리 작업이 지운다
+CREATE TABLE IF NOT EXISTS project_backgrounds (
+  id         text PRIMARY KEY CHECK (length(id) >= 12),
+  project_id text NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+  kind       text NOT NULL CHECK (kind IN ('text', 'link', 'file')),
+  title      text NOT NULL,
+  summary    text NOT NULL DEFAULT '',
+  body       text NOT NULL DEFAULT '',
+  location   text,
+  revision   int NOT NULL DEFAULT 1,
+  updated_by text NOT NULL,
+  deleted_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CHECK ((kind = 'text' AND location IS NULL) OR (kind IN ('link', 'file') AND location IS NOT NULL AND body = ''))
+);
+CREATE INDEX IF NOT EXISTS project_backgrounds_project_id ON project_backgrounds (project_id);
+
+-- 프로젝트 안의 토론. 단순 토론은 NULL
+ALTER TABLE discussions ADD COLUMN IF NOT EXISTS project_id text REFERENCES projects (id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS discussions_project_id ON discussions (project_id);
+
+-- 토론이 참조하는 배경 항목과 시작 시점의 revision (도중에 바뀌었는지 알리는 데 쓴다)
+CREATE TABLE IF NOT EXISTS discussion_backgrounds (
+  discussion_id     text NOT NULL REFERENCES discussions (id) ON DELETE CASCADE,
+  background_id     text NOT NULL REFERENCES project_backgrounds (id) ON DELETE CASCADE,
+  revision_at_start int NOT NULL,
+  PRIMARY KEY (discussion_id, background_id)
+);
+CREATE INDEX IF NOT EXISTS discussion_backgrounds_background_id ON discussion_backgrounds (background_id);

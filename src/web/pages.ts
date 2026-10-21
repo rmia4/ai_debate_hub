@@ -4,6 +4,7 @@ import type { Db } from '../db/db.js';
 import { listConnections, revokeConnection } from '../oauth/connections.js';
 import { loginUrl } from './auth-routes.js';
 import { discussionPagesRouter } from './discussion-pages.js';
+import { projectPagesRouter } from './project-pages.js';
 import { appNav, esc, logoutForm, page, suspendedPage } from './html.js';
 import { checkCsrf, loadSession, type WebSession } from './session.js';
 
@@ -134,6 +135,7 @@ export function pagesRouter(config: Config, db: Db) {
   });
 
   router.use(discussionPagesRouter(config, db));
+  router.use(projectPagesRouter(config, db));
 
   router.get('/app/connections', async (_req, res, next) => {
     try {
