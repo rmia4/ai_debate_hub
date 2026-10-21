@@ -25,6 +25,12 @@ export async function runCleanup(db: Db): Promise<Record<string, number>> {
       `DELETE FROM discussions WHERE status <> 'active' AND ended_at < now() - make_interval(days => $1::int)`,
       [RETENTION_DAYS],
     );
+    // 1-1. 소프트 삭제된 배경 항목 중 참조하던 토론이 모두 사라진 것
+    await step(
+      'backgrounds',
+      `DELETE FROM project_backgrounds b
+       WHERE deleted_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM discussion_backgrounds r WHERE r.background_id = b.id)`,
+    );
     // 2. 만료된 인가 요청·코드·세션 등 (토큰 이력은 3에서 따로)
     await step('sessions', `DELETE FROM sessions WHERE expires_at < now()`);
     await step(

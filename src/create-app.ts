@@ -105,7 +105,8 @@ export function createApp(config: Config, db: Db) {
     },
   );
 
-  app.post('/mcp', express.json({ limit: '100kb' }), async (req, res, next) => {
+  // 모든 도구에 적용되고 인증보다 먼저 해석되므로 배경 본문(5만 자, JSON 약 150KB)에 필요한 최소값으로 둔다
+  app.post('/mcp', express.json({ limit: '256kb' }), async (req, res, next) => {
     try {
       const caller = await resolveCaller(req, provider, config, db);
       if (!caller) {

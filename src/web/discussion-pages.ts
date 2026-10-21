@@ -11,12 +11,15 @@ import {
   discussionsFor,
   type CreateInput,
   type Discussion,
+  type ProjectRef,
+  type Reference,
   type Turn,
 } from '../db/discussions.js';
+import { projectsFor, type Background } from '../db/projects.js';
 import { deleteUser } from '../db/users.js';
-import { instructionFor, PARTICIPANT_NAME } from '../instructions.js';
+import { instructionFor, joinMessage, PARTICIPANT_NAME } from '../instructions.js';
 import { appNav, csrfField, esc, page } from './html.js';
-import { discussionMarkdown, MODE_LABEL, renderMarkdown, STATUS_LABEL } from './markdown.js';
+import { discussionMarkdown, KIND_LABEL, MODE_LABEL, projectMarkdown, renderMarkdown, STATUS_LABEL } from './markdown.js';
 import { checkCsrf, endSession } from './session.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -102,21 +105,63 @@ function conclusionOf(d: Discussion, turns: Turn[]) {
   return `<p><span class="badge">${STATUS_LABEL[d.status]}</span></p>`;
 }
 
-function instructionsSection(d: Discussion) {
-  return `<h2>참여자별 지시문</h2>
-    <p>토론할 두 AI 채팅에 하나씩 붙여 넣으세요. Claude와 Codex처럼 다른 AI여도 되고, 같은 AI의 다른 채팅이어도 됩니다. 지시문에는 인증 정보가 들어 있지 않습니다.</p>
-    ${PARTICIPANTS.map(
-      (p) => `<h3>${PARTICIPANT_NAME[p]} <button type="button" data-copy="instr-${p}">복사</button></h3>
-      <pre id="instr-${p}">${esc(instructionFor(d, p))}</pre>`,
-    ).join('')}`;
+// 참조 배경 목록. 시작 뒤 바뀐 항목은 "토론 중 수정됨", 삭제된 항목은 "삭제됨"(text 본문은 펼쳐 볼 수 있다)
+function referencesSection(refs: Reference[]) {
+  if (!refs.length) return '';
+  const items = refs.map((r) => {
+    const badges = [
+      r.deleted ? '<span class="badge">삭제됨</span>' : '',
+      r.revision !== r.revision_at_start ? `<span class="badge">토론 중 수정됨 r${r.revision_at_start}→r${r.revision}</span>` : '',
+    ].join(' ');
+    const title = r.deleted ? esc(r.title) : `<a href="/app/b/${esc(r.id)}">${esc(r.title)}</a>`;
+    const where = r.location ? ` · <code>${esc(r.location)}</code>` : '';
+    const body = r.body ? `<details><summary>본문</summary>${renderMarkdown(r.body)}</details>` : '';
+    return `<li>${title} <small>${KIND_LABEL[r.kind]}${where}</small> ${badges}${body}</li>`;
+  });
+  return `<h2>참조 배경</h2><ul>${items.join('')}</ul>`;
 }
 
-function newForm(csrf: string, values: Record<string, string> = {}, error = '') {
-  const v = (k: string) => esc(values[k] ?? '');
+function instructionsSection(d: Discussion, project: ProjectRef | null, refs: Reference[]) {
+  return `<h2>참여 방법</h2>
+    <p>토론할 두 AI 채팅에 아래 한 줄을 하나씩 입력하세요. 규칙은 AI가 서버에서 받아 갑니다. Claude와 Codex처럼 다른 AI여도 되고, 같은 AI의 다른 채팅이어도 됩니다. 토론 ID 대신 "세비체 토론에 A석으로 참여해"처럼 주제를 대충 말해도 되고, 진행 중인 토론이 이것 하나뿐이면 "토론 참여해, A석"이라고만 해도 됩니다.</p>
+    ${PARTICIPANTS.map(
+      (p) => `<h3>${PARTICIPANT_NAME[p]} <button type="button" data-copy="join-${p}">복사</button></h3>
+      <pre id="join-${p}">${esc(joinMessage(d, p))}</pre>`,
+    ).join('')}
+    <details><summary>전체 지시문 (AI가 서버 안내를 따르지 않을 때 붙여 넣기)</summary>
+    <p>지시문에는 인증 정보가 들어 있지 않습니다.</p>
+    ${PARTICIPANTS.map(
+      (p) => `<h3>${PARTICIPANT_NAME[p]} <button type="button" data-copy="instr-${p}">복사</button></h3>
+      <pre id="instr-${p}">${esc(instructionFor(d, p, project && { project, refs }))}</pre>`,
+    ).join('')}
+    </details>`;
+}
+
+// 프로젝트 토론이면 참조할 배경 항목 체크박스. 기본은 모두 해제(필요한 항목만 고른다)
+interface ProjectChoice {
+  project: ProjectRef;
+  backgrounds: Background[];
+  checked?: Set<string>;
+}
+
+function backgroundChoices({ project, backgrounds, checked }: ProjectChoice) {
+  const boxes = backgrounds.map(
+    (b) => `<label><input type="checkbox" name="background_ids" value="${esc(b.id)}"${checked?.has(b.id) ? ' checked' : ''}>
+      ${esc(b.title)} <small>${KIND_LABEL[b.kind]}${b.location ? ` · ${esc(b.location)}` : ''}</small></label>`,
+  );
+  return `<input type="hidden" name="project_id" value="${esc(project.id)}">
+    <fieldset><legend>참조할 배경 항목 — 이 토론에 필요한 것만 고르세요 (프로젝트 <a href="/app/p/${esc(project.id)}">${esc(project.name)}</a>)</legend>
+      ${boxes.length ? boxes.join('') : '<p>아직 배경 항목이 없습니다.</p>'}
+    </fieldset>`;
+}
+
+function newForm(csrf: string, values: Record<string, unknown> = {}, error = '', choice: ProjectChoice | null = null) {
+  const v = (k: string) => esc(typeof values[k] === 'string' ? values[k] : '');
   const mode = values.mode === 'sequential' ? 'sequential' : 'parallel';
   return `${error ? `<p class="warn">${esc(error)}</p>` : ''}
     <p class="warn"><b>기밀이나 개인정보를 넣지 마세요.</b> 주제·배경과 AI 답변은 서버에 저장되며, 참여하는 AI 서비스에도 전달됩니다.</p>
     <form method="post" action="/app/new">${csrfField(csrf)}
+      ${choice ? backgroundChoices(choice) : ''}
       <label>주제 (${INPUT_LIMITS.topic}자 이내)<br><input name="topic" required maxlength="${INPUT_LIMITS.topic}" size="60" value="${v('topic')}"></label>
       <label>배경 설명·제약 조건 (선택, ${INPUT_LIMITS.context}자 이내)<br><textarea name="context" maxlength="${INPUT_LIMITS.context}" rows="6" cols="60">${v('context')}</textarea></label>
       <fieldset><legend>진행 방식</legend>
@@ -133,14 +178,20 @@ function parseCreate(body: Record<string, unknown>): CreateInput {
   const str = (k: string) => (typeof body[k] === 'string' ? (body[k] as string) : '');
   const num = (k: string) => (str(k).trim() === '' ? undefined : Number(str(k)));
   const mode = str('mode') === 'sequential' ? 'sequential' : 'parallel';
+  const project = str('project_id');
   return {
     topic: str('topic').trim(),
     context: str('context').trim(),
     mode,
     max_rounds: num('max_rounds'),
     min_rounds: mode === 'parallel' ? num('min_rounds') : undefined,
+    // 프로젝트 토론은 체크한 항목만 참조한다(하나도 안 고르면 빈 목록)
+    ...(project ? { project_id: project, background_ids: checkedIds(body) } : {}),
   };
 }
+
+const checkedIds = (body: Record<string, unknown>) =>
+  ([] as unknown[]).concat(body.background_ids ?? []).filter((x): x is string => typeof x === 'string');
 
 export function discussionPagesRouter(config: Config, db: Db) {
   const router = express.Router();
@@ -162,11 +213,20 @@ export function discussionPagesRouter(config: Config, db: Db) {
     try {
       const web = res.locals.web!;
       const repo = discussionsFor(db, web.user.id);
-      const [list, usage] = await Promise.all([repo.list(), repo.usage()]);
+      const [list, usage, projects] = await Promise.all([repo.list(), repo.usage(), projectsFor(db, web.user.id).list()]);
       const full = usage.stored >= CREATE_LIMITS.stored || usage.bytes >= CREATE_LIMITS.bytes;
+      const projectName = new Map(projects.map((p) => [p.id, p.name]));
+      const projectRows = projects
+        .map(
+          (p) => `<tr><td><a href="/app/p/${esc(p.id)}">${esc(p.name)}</a></td><td>${esc(p.description.slice(0, 80))}</td>
+            <td>${p.backgrounds}</td><td>${formatTime(p.updated_at)}</td></tr>`,
+        )
+        .join('');
       const rows = list
         .map(
-          (d) => `<tr><td><a href="/app/d/${esc(d.id)}">${esc(d.topic)}</a></td><td>${MODE_LABEL[d.mode]}</td>
+          (d) => `<tr><td><a href="/app/d/${esc(d.id)}">${esc(d.topic)}</a></td><td>${
+            d.project_id ? `<a href="/app/p/${esc(d.project_id)}">${esc(projectName.get(d.project_id) ?? '')}</a>` : ''
+          }</td><td>${MODE_LABEL[d.mode]}</td>
             <td>${STATUS_LABEL[d.status]}</td><td>${roundsLabel(d)}</td><td>${formatTime(d.updated_at)}</td></tr>`,
         )
         .join('');
@@ -176,8 +236,12 @@ export function discussionPagesRouter(config: Config, db: Db) {
           `${appNav(web.user.role)}
           <p>진행 중 ${usage.active}/${CREATE_LIMITS.active} · 보관 ${usage.stored}/${CREATE_LIMITS.stored} · 용량 ${formatBytes(usage.bytes)}/${formatBytes(CREATE_LIMITS.bytes)}</p>
           ${full ? deleteGuide : ''}
+          <h2>프로젝트</h2>
+          <p><a class="btn" href="/app/projects/new">새 프로젝트</a></p>
+          ${projects.length ? `<table><tr><th>이름</th><th>설명</th><th>배경 항목</th><th>최근 수정</th></tr>${projectRows}</table>` : '<p>아직 프로젝트가 없습니다. 프로젝트를 만들면 여러 토론이 긴 배경 자료를 함께 참조할 수 있습니다.</p>'}
+          <h2>토론</h2>
           <p><a class="btn" href="/app/new">새 토론방 만들기</a></p>
-          ${list.length ? `<table><tr><th>주제</th><th>방식</th><th>상태</th><th>진행</th><th>최근 수정</th></tr>${rows}</table>` : '<p>아직 토론이 없습니다.</p>'}`,
+          ${list.length ? `<table><tr><th>주제</th><th>프로젝트</th><th>방식</th><th>상태</th><th>진행</th><th>최근 수정</th></tr>${rows}</table>` : '<p>아직 토론이 없습니다.</p>'}`,
         ),
       );
     } catch (e) {
@@ -185,9 +249,20 @@ export function discussionPagesRouter(config: Config, db: Db) {
     }
   });
 
-  router.get('/app/new', (_req, res) => {
+  // ?project=<id>이면 그 프로젝트의 배경 항목을 고르는 칸을 더한다
+  const projectChoice = async (userId: string, projectId: string, checked?: Set<string>): Promise<ProjectChoice> => {
+    const { project, backgrounds } = await projectsFor(db, userId).get(projectId);
+    return { project, backgrounds, checked };
+  };
+
+  router.get('/app/new', async (req, res, next) => {
     const web = res.locals.web!;
-    res.send(page('새 토론방', `${appNav(web.user.role)}${newForm(web.csrf)}`));
+    try {
+      const choice = typeof req.query.project === 'string' ? await projectChoice(web.user.id, req.query.project) : null;
+      res.send(page('새 토론방', `${appNav(web.user.role)}${newForm(web.csrf, {}, '', choice)}`));
+    } catch (e) {
+      handle(res, next, e);
+    }
   });
 
   // 웹 생성도 MCP start_discussion과 같은 저장소 함수(같은 잠금·한도 검사)를 쓴다
@@ -198,22 +273,28 @@ export function discussionPagesRouter(config: Config, db: Db) {
       const d = await discussionsFor(db, web.user.id).create(parseCreate(req.body ?? {}));
       res.redirect(303, `/app/d/${d.id}?created=1`);
     } catch (e) {
-      if (!(e instanceof DiscussionError) || !['invalid_settings', 'limit_exceeded'].includes(e.code)) return next(e);
+      if (!(e instanceof DiscussionError) || !['invalid_settings', 'limit_exceeded'].includes(e.code)) return handle(res, next, e);
       const status = e.code === 'limit_exceeded' ? 409 : 400;
-      res
-        .status(status)
-        .send(page('새 토론방', `${appNav(web.user.role)}${e.code === 'limit_exceeded' ? deleteGuide : ''}${newForm(web.csrf, req.body ?? {}, e.message)}`));
+      const body = req.body ?? {};
+      try {
+        const choice = typeof body.project_id === 'string' && body.project_id ? await projectChoice(web.user.id, body.project_id, new Set(checkedIds(body))) : null;
+        res
+          .status(status)
+          .send(page('새 토론방', `${appNav(web.user.role)}${e.code === 'limit_exceeded' ? deleteGuide : ''}${newForm(web.csrf, body, e.message, choice)}`));
+      } catch (e2) {
+        handle(res, next, e2);
+      }
     }
   });
 
   // 마크다운 내보내기. /app/d/:id보다 먼저 둔다.
   router.get('/app/d/:id.md', async (req, res, next) => {
     try {
-      const { discussion, turns } = await discussionsFor(db, res.locals.web!.user.id).get(req.params.id);
+      const { discussion, turns, refs } = await discussionsFor(db, res.locals.web!.user.id).get(req.params.id);
       res
         .type('text/markdown; charset=utf-8')
         .attachment(`discussion-${discussion.id}.md`)
-        .send(discussionMarkdown(discussion, turns));
+        .send(discussionMarkdown(discussion, turns, refs));
     } catch (e) {
       handle(res, next, e);
     }
@@ -222,7 +303,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
   router.get('/app/d/:id', async (req, res, next) => {
     try {
       const web = res.locals.web!;
-      const { discussion: d, turns } = await discussionsFor(db, web.user.id).get(req.params.id);
+      const { discussion: d, turns, project, refs } = await discussionsFor(db, web.user.id).get(req.params.id);
       const ended = d.status !== 'active';
       const actions = ended
         ? `<form method="post" action="/app/d/${esc(d.id)}/delete">${csrfField(web.csrf)}
@@ -235,19 +316,22 @@ export function discussionPagesRouter(config: Config, db: Db) {
         page(
           d.topic,
           `${appNav(web.user.role)}
-          ${req.query.created ? '<p class="warn">토론방을 만들었습니다. 아래 지시문을 각 AI 채팅에 붙여 넣으세요.</p>' : ''}
+          ${req.query.created ? '<p class="warn">토론방을 만들었습니다. 아래 참여 문구를 각 AI 채팅에 입력하세요.</p>' : ''}
           ${retentionNotice(d)}
           <p>토론 ID <code>${esc(d.id)}</code> · ${MODE_LABEL[d.mode]} 방식 · <span class="badge">${STATUS_LABEL[d.status]}</span> · ${roundsLabel(d)}${
             d.mode === 'parallel' ? ` (최소 ${d.min_rounds})` : ''
-          }${d.starter ? ` · 선공 ${PARTICIPANT_NAME[d.starter]}` : ''}</p>
+          }${d.starter ? ` · 선공 ${PARTICIPANT_NAME[d.starter]}` : ''}${
+            project ? ` · 프로젝트 <a href="/app/p/${esc(project.id)}">${esc(project.name)}</a>` : ''
+          }</p>
           ${d.context ? `<h2>배경</h2>${renderMarkdown(d.context)}` : ''}
+          ${referencesSection(refs)}
           <h2>결론</h2>${conclusionOf(d, turns)}
           <h2>쟁점</h2>${issuesOf(turns)}
           <h2>기록</h2>${d.mode === 'parallel' ? parallelRecord(d, turns) : sequentialRecord(d, turns)}
           ${turns.length || ended ? '' : '<p>아직 제출이 없습니다.</p>'}
           <p><a href="/app/d/${esc(d.id)}.md">마크다운 내보내기</a></p>
           ${actions}
-          ${ended ? '' : instructionsSection(d)}`,
+          ${ended ? '' : instructionsSection(d, project, refs)}`,
         ),
       );
     } catch (e) {
@@ -292,11 +376,12 @@ export function discussionPagesRouter(config: Config, db: Db) {
           <table>
             <tr><td>진행 중인 토론</td><td>${usage.active} / ${CREATE_LIMITS.active}</td></tr>
             <tr><td>보관 토론(종료 포함)</td><td>${usage.stored} / ${CREATE_LIMITS.stored}</td></tr>
-            <tr><td>텍스트 용량(UTF-8)</td><td>${usage.bytes.toLocaleString('ko-KR')} / ${CREATE_LIMITS.bytes.toLocaleString('ko-KR')}바이트</td></tr>
+            <tr><td>텍스트 용량(UTF-8, 배경 항목 포함)</td><td>${usage.bytes.toLocaleString('ko-KR')} / ${CREATE_LIMITS.bytes.toLocaleString('ko-KR')}바이트</td></tr>
+            <tr><td>그중 삭제됐지만 과거 토론 기록 때문에 보관 중인 배경 용량</td><td>${usage.retainedBytes.toLocaleString('ko-KR')}바이트</td></tr>
             <tr><td>오늘 만든 토론</td><td>${usage.createdToday} / ${CREATE_LIMITS.perDay}</td></tr>
           </table>
           <h2>전체 기록 내보내기</h2>
-          <p><a href="/app/account/export.md">모든 토론을 마크다운으로 내려받기</a></p>
+          <p><a href="/app/account/export.md">모든 프로젝트와 토론을 마크다운으로 내려받기</a></p>
           <h2>회원 탈퇴</h2>
           <p class="warn">탈퇴하면 계정, MCP 연결, 모든 토론 기록이 <b>즉시 삭제</b>되며 복구할 수 없습니다. 먼저 위에서 전체 기록을 내려받으세요.</p>
           <form method="post" action="/app/account/delete">${csrfField(web.csrf)}
@@ -311,8 +396,12 @@ export function discussionPagesRouter(config: Config, db: Db) {
 
   router.get('/app/account/export.md', async (_req, res, next) => {
     try {
-      const all = await discussionsFor(db, res.locals.web!.user.id).all();
-      const body = all.map(({ discussion, turns }) => discussionMarkdown(discussion, turns)).join('\n---\n\n');
+      const userId = res.locals.web!.user.id;
+      const [projects, all] = await Promise.all([projectsFor(db, userId).all(), discussionsFor(db, userId).all()]);
+      const body = [
+        ...projects.map(({ project, backgrounds }) => projectMarkdown(project, backgrounds)),
+        ...all.map(({ discussion, turns, refs }) => discussionMarkdown(discussion, turns, refs)),
+      ].join('\n---\n\n');
       res
         .type('text/markdown; charset=utf-8')
         .attachment('ai-debate-hub-export.md')

@@ -96,6 +96,60 @@ describe('자리(A/B)', () => {
   });
 });
 
+describe('지시문 없이 참여', () => {
+  it('초기화 응답의 instructions가 참여 방법을 알려 준다', async () => {
+    const u = await pair();
+    const res = await fetch(s.config.resource, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${u.claudeToken}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } },
+      }),
+    });
+    const { result } = (await res.json()) as { result: { instructions?: string } };
+    expect(result.instructions).toContain('discussion_id 없이 get_state');
+    expect(result.instructions).toContain('사용자가 말한 주제와 뜻이 맞는 토론');
+  });
+
+  it('discussion_id를 생략하면 진행 중인 토론이 하나일 때만 그 토론을 조회하고, 여럿이면 목록을 돌려준다', async () => {
+    const u = await pair();
+    expect((await u.claude('get_state', {})).data.error).toBe('not_found');
+
+    const first = await start(u.claude, { topic: '첫 토론' });
+    const one = await u.claude('get_state', {});
+    expect(one.isError).toBe(false);
+    expect(one.data.discussion_id).toBe(first);
+
+    const second = await start(u.claude, { topic: '둘째 토론' });
+    const many = await u.codex('get_state', {});
+    expect(many).toMatchObject({ isError: true, data: { error: 'choose_discussion' } });
+    expect(many.data.discussions.map((d: { discussion_id: string; topic: string }) => [d.discussion_id, d.topic]).sort()).toEqual(
+      [[first, '첫 토론'], [second, '둘째 토론']].sort(),
+    );
+
+    await u.claude('submit', { discussion_id: second, expected_round: 1, content: '근거' });
+    await s.db.query(`UPDATE discussions SET status = 'closed' WHERE id = $1`, [second]);
+    expect((await u.codex('get_state', {})).data.discussion_id).toBe(first);
+  });
+
+  it('get_state는 내 제출이 없는 동안에만 방식에 맞는 rules를 보낸다', async () => {
+    const u = await pair();
+    const id = await start(u.claude);
+    const before = (await u.claude('get_state', { discussion_id: id })).data;
+    expect(before.rules).toContain('쉽게 동의하지 않는다');
+    expect(before.rules).toContain('다음 라운드 진행');
+    await ok(u.claude, id, { expected_round: 1 });
+    expect((await u.claude('get_state', { discussion_id: id })).data.rules).toBeUndefined();
+    expect((await u.codex('get_state', { discussion_id: id })).data.rules).toBeDefined();
+
+    const seq = await start(u.claude, { mode: 'sequential' });
+    expect((await u.codex('get_state', { discussion_id: seq })).data.rules).toContain('sign=true');
+  });
+});
+
 describe('공통', () => {
   it('응답 유실 후 같은 번호로 재제출하면 라운드가 넘어간 뒤에도 저장된 결과를 반환한다', async () => {
     const u = await pair();
