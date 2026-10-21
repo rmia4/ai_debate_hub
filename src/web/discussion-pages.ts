@@ -137,7 +137,7 @@ function instructionsSection(d: Discussion, project: ProjectRef | null, refs: Re
     </details>`;
 }
 
-// 프로젝트 토론이면 참조할 배경 항목 체크박스(checked가 없으면 모두 선택)
+// 프로젝트 토론이면 참조할 배경 항목 체크박스. 기본은 모두 해제(필요한 항목만 고른다)
 interface ProjectChoice {
   project: ProjectRef;
   backgrounds: Background[];
@@ -146,11 +146,11 @@ interface ProjectChoice {
 
 function backgroundChoices({ project, backgrounds, checked }: ProjectChoice) {
   const boxes = backgrounds.map(
-    (b) => `<label><input type="checkbox" name="background_ids" value="${esc(b.id)}"${!checked || checked.has(b.id) ? ' checked' : ''}>
+    (b) => `<label><input type="checkbox" name="background_ids" value="${esc(b.id)}"${checked?.has(b.id) ? ' checked' : ''}>
       ${esc(b.title)} <small>${KIND_LABEL[b.kind]}${b.location ? ` · ${esc(b.location)}` : ''}</small></label>`,
   );
   return `<input type="hidden" name="project_id" value="${esc(project.id)}">
-    <fieldset><legend>참조할 배경 항목 (프로젝트 <a href="/app/p/${esc(project.id)}">${esc(project.name)}</a>)</legend>
+    <fieldset><legend>참조할 배경 항목 — 이 토론에 필요한 것만 고르세요 (프로젝트 <a href="/app/p/${esc(project.id)}">${esc(project.name)}</a>)</legend>
       ${boxes.length ? boxes.join('') : '<p>아직 배경 항목이 없습니다.</p>'}
     </fieldset>`;
 }

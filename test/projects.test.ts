@@ -162,17 +162,25 @@ describe('흐름', () => {
     expect(page).toContain('프로젝트: 흐름 프로젝트');
   });
 
-  it('background_ids를 생략하면 프로젝트의 모든 항목을, 웹 폼은 체크한 항목만 참조한다', async () => {
+  it('background_ids를 생략하면 아무것도 참조하지 않고, 웹 폼은 모두 해제된 채 체크한 항목만 참조한다', async () => {
     const u = await user();
     const pid = await webProject(u);
     const a = await addId(u, pid, { kind: 'text', title: 'a' });
     const b = await addId(u, pid, { kind: 'link', title: 'b', location: 'http://example.com' });
-    const all = await startIn(u, pid);
-    expect((await tool(u.claude, 'get_state', { discussion_id: all.discussion_id })).data.references).toHaveLength(2);
+    const none = await startIn(u, pid);
+    const state = (await tool(u.claude, 'get_state', { discussion_id: none.discussion_id })).data;
+    expect(state.project_id).toBe(pid);
+    expect(state.references).toEqual([]);
+    expect(none.instructions.A).toContain('참조 배경:\n(없음)');
 
     const form = await (await u.get(`/app/new?project=${pid}`)).text();
-    expect(form).toContain(`name="background_ids" value="${a}" checked`);
-    expect(form).toContain(`name="background_ids" value="${b}" checked`);
+    expect(form).toContain(`name="background_ids" value="${a}">`);
+    expect(form).toContain(`name="background_ids" value="${b}">`);
+    expect(form).not.toMatch(/name="background_ids"[^>]* checked/);
+    // 오류로 다시 그린 폼은 고른 항목을 유지한다
+    const retry = await (await u.post('/app/new', { topic: '', project_id: pid, background_ids: b })).text();
+    expect(retry).toContain(`name="background_ids" value="${b}" checked`);
+    expect(retry).toContain(`name="background_ids" value="${a}">`);
     const res = await u.post('/app/new', { topic: '웹 프로젝트 토론', project_id: pid, background_ids: b });
     expect(res.status).toBe(303);
     const id = /^\/app\/d\/([^?]+)/.exec(res.headers.get('location')!)![1];

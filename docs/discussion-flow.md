@@ -50,7 +50,7 @@ MCP는 AI가 먼저 호출해야 응답하므로 서버가 채팅에 지시문�
 
 | 도구 | 입력 | 반환 | 비고 |
 | --- | --- | --- | --- |
-| `start_discussion` | `topic`, `context`(선택), `mode`(`parallel`/`sequential`, 기본 `parallel`), `max_rounds`(동시 기본 5, 순차 기본 10), `min_rounds`(동시 기본 2), `project_id`(선택), `background_ids`(선택, `project_id`와 함께만. 생략하면 프로젝트의 모든 항목) | `discussion_id`, 자리별(`A`/`B`) 지시문 | 웹 생성이 기본이고, 채팅에서 만들 때만 사용. 접속 주소·비밀값은 반환하지 않음. 동시: 2 ≤ `min_rounds` ≤ `max_rounds` ≤ 10, 순차: 4 ≤ `max_rounds` ≤ 20 |
+| `start_discussion` | `topic`, `context`(선택), `mode`(`parallel`/`sequential`, 기본 `parallel`), `max_rounds`(동시 기본 5, 순차 기본 10), `min_rounds`(동시 기본 2), `project_id`(선택), `background_ids`(선택, `project_id`와 함께만. 생략하면 참조 없음. 참조마다 `get_state` 목록과 읽기 비용이 늘어나므로 필요한 항목만 고름) | `discussion_id`, 자리별(`A`/`B`) 지시문 | 웹 생성이 기본이고, 채팅에서 만들 때만 사용. 접속 주소·비밀값은 반환하지 않음. 동시: 2 ≤ `min_rounds` ≤ `max_rounds` ≤ 10, 순차: 4 ≤ `max_rounds` ≤ 20 |
 | `get_state` | `discussion_id`(선택), `seat` | 주제·배경, 진행 방식, 현재 라운드(순차는 턴), 내 차례·제출 여부, 직전 답변(동시: 양쪽, 순차: 상대 직전 턴), 각 답변의 동의 대상 ID, 합의 후보 목록(완료된 라운드의 `proposal` ID·라운드·제안자·본문), 순차 방식의 현재 합의안과 사인 현황, 토론 상태, 내 제출이 없는 동안 방식별 규칙(`rules`) | `discussion_id`를 생략하면 진행 중인 토론이 하나일 때 그 토론, 없으면 `not_found`, 여럿이면 `choose_discussion`과 목록. 동시 방식 라운드 1은 상대 답변 없음. 진행 중인 라운드의 새 합의안은 상대에게 숨김. 순차 방식에서 아무도 시작하지 않았으면 "먼저 제출하면 선공"을 안내 |
 | `submit` | `discussion_id`, `seat`, `expected_round`, `content`, `proposal`(선택), `open_issues`, 동시 방식: `agreement`·`accepted_proposal_id`, 순차 방식: `sign` | 접수 결과, 다음 차례, 합의 판정 결과 | 같은 번호의 기존 제출이 있으면 그 결과 반환(재시도). 순차 방식은 `agreement`를 받지 않음 |
 | `get_summary` | `discussion_id` | 진행 중: 완료된 라운드·턴만 / 종료 후: 전체 기록과 결론. 각 답변의 합의안 ID와 본문 포함 | 진행 중인 라운드 답변은 노출하지 않음 |

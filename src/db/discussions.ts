@@ -47,7 +47,7 @@ export interface CreateInput {
   mode?: Mode;
   max_rounds?: number;
   min_rounds?: number;
-  // 프로젝트 토론만. background_ids를 생략하면 프로젝트의 모든 배경 항목을 참조한다
+  // 프로젝트 토론만. background_ids를 생략하면 아무 항목도 참조하지 않는다(참조마다 get_state 목록과 읽기 비용이 늘어난다)
   project_id?: string;
   background_ids?: string[];
 }
@@ -315,13 +315,13 @@ export function discussionsFor(db: Db, userId: string) {
         if (input.project_id) {
           const project = await q.query(`SELECT id FROM projects WHERE id = $1 AND owner_id = $2`, [input.project_id, userId]);
           if (!project.rows[0]) throw new DiscussionError('not_found', '존재하지 않는 프로젝트입니다');
-          const picked = input.background_ids;
+          const picked = input.background_ids ?? [];
           const { rows } = await q.query<{ id: string }>(
-            `SELECT id FROM project_backgrounds WHERE project_id = $1 AND deleted_at IS NULL${picked ? ' AND id = ANY($2)' : ''}`,
-            picked ? [input.project_id, picked] : [input.project_id],
+            `SELECT id FROM project_backgrounds WHERE project_id = $1 AND deleted_at IS NULL AND id = ANY($2)`,
+            [input.project_id, picked],
           );
           backgroundIds = rows.map((r) => r.id);
-          if (picked && backgroundIds.length !== new Set(picked).size) {
+          if (backgroundIds.length !== new Set(picked).size) {
             throw new DiscussionError('not_found', '이 프로젝트에 없는 배경 항목이 있습니다');
           }
         }

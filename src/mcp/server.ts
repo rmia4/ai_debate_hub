@@ -194,7 +194,7 @@ function buildServer(caller: Caller, db: Db): McpServer {
         topic: z.string().min(1).max(200).describe('토론 주제'),
         context: z.string().max(2000).optional().describe('배경 설명·제약 조건'),
         project_id: projectId.optional().describe('프로젝트 안에서 토론을 열 때 프로젝트 ID(list_projects로 찾는다)'),
-        background_ids: z.array(backgroundId).max(30).optional().describe('참조할 배경 항목 ID. project_id와 함께만 쓴다. 생략하면 프로젝트의 모든 항목'),
+        background_ids: z.array(backgroundId).max(30).optional().describe('참조할 배경 항목 ID. project_id와 함께만 쓴다. 생략하면 아무것도 참조하지 않는다. get_project로 목록을 보고 이 토론에 필요한 항목만 고른다'),
         mode: z.enum(['parallel', 'sequential']).optional().describe('parallel(동시, 기본) 또는 sequential(순차)'),
         max_rounds: z.number().int().optional().describe('최대 라운드(동시 기본 5, 2~10) 또는 최대 턴(순차 기본 10, 4~20)'),
         min_rounds: z.number().int().optional().describe('최소 라운드(동시 방식만, 기본 2)'),
