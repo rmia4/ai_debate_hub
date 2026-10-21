@@ -49,23 +49,23 @@ describe('탐색', () => {
   });
 });
 
-describe('DCR + 동의 화면 역할 선택', () => {
-  it('Claude용·Codex용 연결이 각자 역할로 판별된다', async () => {
+describe('DCR + 동의 화면', () => {
+  it('Claude·Codex 연결이 각자 (사용자, 앱)으로 판별되고 공존한다', async () => {
     const alice = await loginAs(s, 'alice');
     const claude = await registerClient(s, CLAUDE_CB, 'Claude');
-    const a = await authorize(s, { clientId: claude.client_id, redirectUri: CLAUDE_CB, browser: alice.browser, participant: 'claude' });
+    const a = await authorize(s, { clientId: claude.client_id, redirectUri: CLAUDE_CB, browser: alice.browser });
     expect(a.iss).toBe(s.config.issuer);
     expect(a.consentPage).not.toContain('로컬 앱으로 돌아갑니다');
     const t1 = await exchangeCode(s, claude.client_id, CLAUDE_CB, a.code, a.verifier);
     expect(t1.status).toBe(200);
     expect(t1.json.refresh_token).toBeTruthy();
-    expect(await callGetState(s, t1.json.access_token)).toMatchObject({ status: 200, state: { user: alice.userId, me: 'claude' } });
+    expect(await callGetState(s, t1.json.access_token)).toMatchObject({ status: 200, state: { user: alice.userId, app: 'Claude' } });
 
     const codex = await registerClient(s, CODEX_CB, 'Codex');
-    const b = await authorize(s, { clientId: codex.client_id, redirectUri: CODEX_CB, browser: alice.browser, participant: 'codex' });
+    const b = await authorize(s, { clientId: codex.client_id, redirectUri: CODEX_CB, browser: alice.browser });
     expect(b.consentPage).toContain('로컬 앱으로 돌아갑니다');
     const t2 = await exchangeCode(s, codex.client_id, CODEX_CB, b.code, b.verifier);
-    expect(await callGetState(s, t2.json.access_token)).toMatchObject({ status: 200, state: { user: alice.userId, me: 'codex' } });
+    expect(await callGetState(s, t2.json.access_token)).toMatchObject({ status: 200, state: { user: alice.userId, app: 'Codex' } });
 
     // 두 연결이 공존한다
     expect((await callGetState(s, t1.json.access_token)).status).toBe(200);
@@ -76,7 +76,7 @@ describe('MCP 클라이언트', () => {
   it('SDK 클라이언트로 initialize·도구 목록·get_state 호출이 된다', async () => {
     const c = await registerClient(s, CLAUDE_CB, 'Claude');
     const sdk = await loginAs(s, 'sdk');
-    const a = await authorize(s, { clientId: c.client_id, redirectUri: CLAUDE_CB, browser: sdk.browser, participant: 'claude' });
+    const a = await authorize(s, { clientId: c.client_id, redirectUri: CLAUDE_CB, browser: sdk.browser });
     const t = await exchangeCode(s, c.client_id, CLAUDE_CB, a.code, a.verifier);
     const client = new Client({ name: 'test', version: '0' });
     await client.connect(
@@ -88,8 +88,8 @@ describe('MCP 클라이언트', () => {
     expect(tools.map((x) => x.name).sort()).toEqual(['get_state', 'get_summary', 'start_discussion', 'submit']);
     const created = (await client.callTool({ name: 'start_discussion', arguments: { topic: 'SDK 시험' } })) as { content: { text: string }[] };
     const { discussion_id } = JSON.parse(created.content[0].text);
-    const r = (await client.callTool({ name: 'get_state', arguments: { discussion_id } })) as { content: { text: string }[] };
-    expect(JSON.parse(r.content[0].text)).toMatchObject({ me: 'claude', discussion_id, status: 'active' });
+    const r = (await client.callTool({ name: 'get_state', arguments: { discussion_id, seat: 'A' } })) as { content: { text: string }[] };
+    expect(JSON.parse(r.content[0].text)).toMatchObject({ me: 'A', discussion_id, status: 'active' });
     await client.close();
   });
 });
@@ -162,7 +162,7 @@ describe('동의 화면', () => {
     const { browser, userId } = await loginAs(s, 'csrf-user');
     const flow = await startAuthorize(s, { clientId: c.client_id, redirectUri: CLAUDE_CB, browser });
     for (const csrf of ['', 'forged']) {
-      const res = await browser.request(`${flow.consentUrl}/consent`, browser.form({ participant: 'claude', csrf }));
+      const res = await browser.request(`${flow.consentUrl}/consent`, browser.form({ csrf }));
       expect(res.status).toBe(403);
     }
     const { rows } = await s.db.query(`SELECT 1 FROM oauth_connections WHERE user_id = $1`, [userId]);

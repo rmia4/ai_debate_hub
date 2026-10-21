@@ -5,7 +5,7 @@ import type { Db } from '../db/db.js';
 import { loginUrl } from '../web/auth-routes.js';
 import { esc, page, suspendedPage } from '../web/html.js';
 import { checkCsrf, loadSession, type WebSession } from '../web/session.js';
-import { findActiveConnection, PARTICIPANTS, replaceConnection, type Participant } from './connections.js';
+import { findActiveConnection, replaceConnection } from './connections.js';
 import { LOOPBACK_HOSTS, MCP_SCOPE } from './provider.js';
 
 // provider의 scopes 설정에 든 값은 OIDC 범위로도 승인해야 동의 프롬프트가 다시 뜨지 않는다
@@ -58,8 +58,7 @@ export function interactionRouter(provider: Provider, config: Config, db: Db) {
       const loopbackOnly =
         (client.redirectUris?.length ?? 0) > 0 &&
         client.redirectUris!.every((u) => LOOPBACK_HOSTS.has(new URL(u).hostname));
-      const suggested: Participant = /codex|openai/i.test(`${clientName} ${client.clientId}`) ? 'codex' : 'claude';
-      const existing = await Promise.all(PARTICIPANTS.map((p) => findActiveConnection(db, web.user.id, p)));
+      const existing = await findActiveConnection(db, web.user.id, client.clientId);
       const csrf = `<input type="hidden" name="csrf" value="${esc(web.csrf)}">`;
 
       res.send(
@@ -72,15 +71,9 @@ export function interactionRouter(provider: Provider, config: Config, db: Db) {
               ? `<p class="warn">이 연결은 현재 기기의 로컬 앱으로 돌아갑니다(${redirectHosts.map(esc).join(', ')}). 직접 시작한 연결인지 확인한 뒤 허용하세요.</p>`
               : ''
           }
+          ${existing ? `<p><small>이 앱의 기존 연결을 새 연결로 교체합니다.</small></p>` : ''}
           <form method="post" action="/oauth/interaction/${esc(details.uid)}/consent">
             ${csrf}
-            <p>이 앱의 역할을 고르세요.</p>
-            ${PARTICIPANTS.map((p, i) => {
-              const label = p === 'claude' ? 'Claude용' : 'Codex용';
-              const old = existing[i];
-              const note = old ? ` <small>(기존 연결 ${esc(old.client_name)}을(를) 교체합니다)</small>` : '';
-              return `<label><input type="radio" name="participant" value="${p}"${p === suggested ? ' checked' : ''}> ${label}${note}</label>`;
-            }).join('')}
             <button type="submit">허용</button>
           </form>
           <form method="post" action="/oauth/interaction/${esc(details.uid)}/abort">${csrf}<button type="submit">거부</button></form>`,
@@ -96,11 +89,6 @@ export function interactionRouter(provider: Provider, config: Config, db: Db) {
       const details = await provider.interactionDetails(req, res);
       const web = await requireUser(req, res, details.uid, details.session?.accountId);
       if (!web || rejectCsrf(res, web, req.body.csrf)) return;
-      const participant = req.body.participant as Participant;
-      if (!PARTICIPANTS.includes(participant)) {
-        res.status(400).send(page('오류', '<p>역할을 골라 주세요.</p>'));
-        return;
-      }
       const clientId = String(details.params.client_id);
       const client = await provider.Client.find(clientId);
       if (!client) throw new Error('unknown client');
@@ -113,7 +101,7 @@ export function interactionRouter(provider: Provider, config: Config, db: Db) {
       if (oidcScopes.length) grant.addOIDCScope(oidcScopes.join(' '));
       grant.addResourceScope(config.resource, MCP_SCOPE);
       const grantId = await grant.save();
-      await replaceConnection(db, { grantId, userId: accountId, participant, clientId, clientName: client.clientName ?? clientId });
+      await replaceConnection(db, { grantId, userId: accountId, clientId, clientName: client.clientName ?? clientId });
       // 로그인과 동의를 한 번에 끝낸다
       await provider.interactionFinished(req, res, { login: { accountId }, consent: { grantId } }, { mergeWithLastSubmission: false });
     } catch (e) {

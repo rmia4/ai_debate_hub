@@ -23,11 +23,17 @@ export const appNav = (role: 'user' | 'admin') =>
     role === 'admin' ? '<a href="/admin">운영자</a>' : ''
   }</nav>`;
 
-// 복사 버튼 동작. CSP가 인라인 스크립트를 막으므로 별도 파일로 낸다.
+// 복사 버튼과 대화상자 열기 동작. CSP가 인라인 스크립트를 막으므로 별도 파일로 낸다.
 export const APP_JS = `document.addEventListener('click', (e) => {
+  const d = e.target.closest('[data-dialog]');
+  if (d) document.getElementById(d.dataset.dialog).showModal();
   const b = e.target.closest('[data-copy]');
   if (!b) return;
-  navigator.clipboard.writeText(document.getElementById(b.dataset.copy).textContent).then(() => { b.textContent = '복사됨'; });
+  const label = (b.dataset.label ??= b.textContent);
+  navigator.clipboard.writeText(document.getElementById(b.dataset.copy).textContent).then(
+    () => { b.textContent = '복사했습니다'; setTimeout(() => { b.textContent = label; }, 2000); },
+    () => { const err = document.getElementById('copy-error'); if (err) err.hidden = false; },
+  );
 });`;
 
 export const logoutForm = (csrf: string) =>

@@ -40,7 +40,7 @@ export function discussionMarkdown(d: Discussion, turns: Turn[]): string {
   if (d.context) lines.push('## 배경', '', d.context, '');
   lines.push('## 기록', '');
   for (const t of turns) {
-    lines.push(`### ${unit} ${t.round} · ${PARTICIPANT_NAME[t.participant]} (답변 ID ${t.id})`, '', t.content, '');
+    lines.push(`### ${unit} ${t.round} · ${PARTICIPANT_NAME[t.participant]}${t.client_name ? ` (${t.client_name})` : ''} · 답변 ID ${t.id}`, '', t.content, '');
     if (t.proposal) lines.push('**제안**', '', t.proposal, '');
     if (t.agreement) lines.push(`- 동의 상태: ${t.agreement}${t.accepted_proposal_id ? ` (합의안 ${t.accepted_proposal_id})` : ''}`);
     if (t.sign) lines.push('- 사인함');

@@ -1,15 +1,11 @@
 import type { Db, Queryable } from '../db/db.js';
 
-export type Participant = 'claude' | 'codex';
-export const PARTICIPANTS: readonly Participant[] = ['claude', 'codex'];
-
 export const CONNECTION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 export interface Connection {
   id: string;
   grant_id: string;
   user_id: string;
-  participant: Participant;
   client_id: string;
   client_name: string;
   created_at: Date;
@@ -22,25 +18,25 @@ async function deleteGrantModels(q: Queryable, grantId: string) {
   await q.query(`DELETE FROM oidc_models WHERE grant_id = $1 OR (model = 'Grant' AND id = $1)`, [grantId]);
 }
 
-// 같은 사용자·역할의 미폐기 연결(만료된 것 포함)을 폐기하고 새 연결을 만든다.
-// 사용자 단위 잠금 + 부분 유니크 인덱스로 동시 재연결에서도 1개만 남는다.
+// 같은 사용자·같은 앱(client_id)의 미폐기 연결(만료된 것 포함)을 폐기하고 새 연결을 만든다.
+// 다른 앱의 연결은 그대로 둔다. 사용자 단위 잠금으로 동시 재연결에서도 1개만 남는다.
 export async function replaceConnection(
   db: Db,
-  input: { grantId: string; userId: string; participant: Participant; clientId: string; clientName: string },
+  input: { grantId: string; userId: string; clientId: string; clientName: string },
 ): Promise<void> {
   await db.tx(async (q) => {
     await q.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [input.userId]);
     const { rows: old } = await q.query<{ grant_id: string }>(
       `UPDATE oauth_connections SET revoked_at = now(), revoke_reason = 'replaced'
-       WHERE user_id = $1 AND participant = $2 AND revoked_at IS NULL
+       WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL
        RETURNING grant_id`,
-      [input.userId, input.participant],
+      [input.userId, input.clientId],
     );
     for (const { grant_id } of old) await deleteGrantModels(q, grant_id);
     await q.query(
-      `INSERT INTO oauth_connections (grant_id, user_id, participant, client_id, client_name, expires_at)
-       VALUES ($1, $2, $3, $4, $5, now() + make_interval(secs => $6::int))`,
-      [input.grantId, input.userId, input.participant, input.clientId, input.clientName, CONNECTION_TTL_SECONDS],
+      `INSERT INTO oauth_connections (grant_id, user_id, client_id, client_name, expires_at)
+       VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5::int))`,
+      [input.grantId, input.userId, input.clientId, input.clientName, CONNECTION_TTL_SECONDS],
     );
   });
 }
@@ -60,11 +56,11 @@ export async function revokeConnection(db: Db, userId: string, connectionId: str
   });
 }
 
-export async function findActiveConnection(db: Db, userId: string, participant: Participant) {
+export async function findActiveConnection(db: Db, userId: string, clientId: string) {
   const { rows } = await db.query<Connection>(
     `SELECT * FROM oauth_connections
-     WHERE user_id = $1 AND participant = $2 AND revoked_at IS NULL AND expires_at > now()`,
-    [userId, participant],
+     WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL AND expires_at > now()`,
+    [userId, clientId],
   );
   return rows[0];
 }
@@ -73,7 +69,7 @@ export async function findActiveConnection(db: Db, userId: string, participant: 
 export async function listConnections(db: Db, userId: string) {
   const { rows } = await db.query<Connection & { expired: boolean }>(
     `SELECT *, expires_at <= now() AS expired FROM oauth_connections
-     WHERE user_id = $1 AND revoked_at IS NULL ORDER BY participant`,
+     WHERE user_id = $1 AND revoked_at IS NULL ORDER BY created_at`,
     [userId],
   );
   return rows;

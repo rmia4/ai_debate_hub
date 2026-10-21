@@ -110,7 +110,7 @@ MCP 연결(OAuth 2.1) 설계는 [인증·보안](auth-security.md)에 있습니�
 | `sessions` | `id`, `user_id`, `expires_at` | 웹 로그인 세션 (서버리스 인스턴스 간 공유) |
 | `oauth_clients` | `client_id`(CIMD는 URL), `registration_type`(`cimd`/`dcr`), `client_name`, `redirect_uris`, `metadata_fetched_at` | MCP 클라이언트 |
 | `oauth_auth_requests` | `id`, `client_id`, `redirect_uri`, `code_challenge`, `resource`, `scope`, `state`, `expires_at` | 로그인·동의 사이에 서버가 보존하는 인가 요청 (10분) |
-| `oauth_connections` | `id`, `user_id`, `participant`(`claude`/`codex`), `client_id`, `resource`, `created_at`, `expires_at`, `last_used_at`, `revoked_at`, `revoke_reason` | 동의로 생긴 연결(grant). `(user_id, participant) WHERE revoked_at IS NULL` 부분 유니크 인덱스 또는 라이브러리의 동등한 제약으로 미폐기 행 1개 보장 |
+| `oauth_connections` | `id`, `user_id`, `client_id`, `client_name`, `created_at`, `expires_at`, `last_used_at`, `revoked_at`, `revoke_reason` | 동의로 생긴 연결(grant). 역할이 없고 한 사용자가 여러 앱을 연결할 수 있음. 같은 앱(`client_id`)으로 다시 연결하면 기존 연결을 사용자 잠금 아래 폐기 |
 | `oauth_codes` | `code_hash`, `connection_id`, `redirect_uri`, `code_challenge`, `resource`, `expires_at`, `used_at` | 1회용 인가 코드 |
 | `oauth_tokens` | `id`, `connection_id`, `kind`(`access`/`refresh`), `token_hash`, `parent_id`, `expires_at`, `used_at`, `revoked_at` | 교체된 토큰을 포함한 발급 이력 전체 보존. `token_hash` 유니크 |
 | `rate_limits` | `key`(사용자·연결·IP 단위), `count`, `window_start` | 로그인·가입·인가·등록·제출 횟수 제한 기록 |
@@ -142,7 +142,8 @@ MCP 연결(OAuth 2.1) 설계는 [인증·보안](auth-security.md)에 있습니�
 | `id` | bigserial (PK) | 답변 ID. `proposal`이 있으면 합의안 ID로 사용 |
 | `discussion_id` | text (FK) | 소속 토론 |
 | `round` | int | 라운드 번호(동시) 또는 턴 번호(순차) |
-| `participant` | text | `claude` / `codex` (OAuth 연결의 참여자 역할로 서버가 결정) |
+| `participant` | text | 자리 `A` / `B` (도구 입력 `seat`으로 받음) |
+| `client_name` | text | 제출한 연결의 앱 이름 (기록 표시용) |
 | `content` | text | 답변 본문 (최대 8,000자) |
 | `proposal` | text | 제시한 최종안 (선택, 최대 4,000자) |
 | `agreement` | text | `agree` / `partial` / `disagree` |
