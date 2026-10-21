@@ -177,7 +177,7 @@ function buildServer(caller: Caller, db: Db): McpServer {
   async function resolveId(id: string | undefined): Promise<string | CallToolResult> {
     if (id) return id;
     const active = (await repo.list()).filter((d) => d.status === 'active');
-    if (active.length === 0) return fail('not_found', '진행 중인 토론이 없습니다. 웹에서 토론방을 만들거나 토론 ID를 알려 달라고 사용자에게 요청하세요');
+    if (active.length === 0) return fail('not_found', '진행 중인 토론이 없습니다. 종료된 토론은 list_discussions로 찾으세요. 새로 토론하려면 웹에서 토론방을 만들라고 사용자에게 안내하세요');
     if (active.length > 1) {
       return fail('choose_discussion', '진행 중인 토론이 여럿입니다. 사용자가 말한 주제와 맞는 토론이 하나뿐이면 그 discussion_id로 다시 호출하고, 아니면 목록을 보여 주고 사용자에게 고르게 하세요', {
         discussions: active.map((d) => ({ discussion_id: d.id, topic: d.topic, mode: d.mode, created_at: d.created_at })),
@@ -292,6 +292,33 @@ function buildServer(caller: Caller, db: Db): McpServer {
           conclusion,
           agreed_proposal: agreed,
           ...projectFields(d, refs),
+        });
+      }),
+  );
+
+  // 종료된 토론은 get_state의 ID 생략으로 찾을 수 없으므로 목록을 따로 둔다. 보관 한도(50개)가 있어 페이지를 나누지 않는다.
+  server.registerTool(
+    'list_discussions',
+    {
+      description:
+        '내 토론 목록을 최근 수정 순으로 조회한다(ID·주제·상태·방식·프로젝트). 종료된 토론도 포함한다. ' +
+        '토론 ID를 모를 때 쓰고, 사용자가 말한 주제와 뜻이 맞는 토론을 골라 get_summary·get_state를 부른다. 맞는 것이 없거나 여럿이면 사용자에게 묻는다.',
+      inputSchema: {
+        status: z.enum(['active', 'agreed', 'max_reached', 'closed']).optional().describe('이 상태의 토론만. 생략하면 전부'),
+      },
+    },
+    ({ status }) =>
+      run(async () => {
+        const list = (await repo.list()).filter((d) => !status || d.status === status);
+        return json({
+          discussions: list.map((d) => ({
+            discussion_id: d.id,
+            topic: d.topic,
+            status: d.status,
+            mode: d.mode,
+            project_id: d.project_id,
+            updated_at: d.updated_at,
+          })),
         });
       }),
   );

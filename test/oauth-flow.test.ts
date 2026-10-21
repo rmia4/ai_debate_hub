@@ -91,6 +91,7 @@ describe('MCP 클라이언트', () => {
       'get_project',
       'get_state',
       'get_summary',
+      'list_discussions',
       'list_projects',
       'start_discussion',
       'submit',
