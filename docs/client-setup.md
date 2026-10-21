@@ -1,18 +1,33 @@
 # 클라이언트 연결과 지시문
 
-모든 사용자는 같은 서비스 주소 `https://<서비스 주소>/mcp`를 등록하고, 처음 연결할 때 로그인·동의 화면에서 Claude용/Codex용을 고릅니다. 연결 설정 화면(`/app/connections`)에 아래 절차를 그대로 안내합니다.
+모든 사용자는 같은 서비스 주소 `https://<서비스 주소>/mcp`를 등록하고, 처음 연결할 때 로그인·동의 화면에서 허용합니다. 연결에는 역할이 없습니다. 토론의 A석·B석은 토론방마다 발급되는 지시문으로 정하므로, AI 하나만 연결해 그 AI의 두 채팅끼리 토론할 수도 있습니다. 연결 설정 화면(`/app/connections`)에 아래 절차를 그대로 안내합니다.
 
 ## Claude (커스텀 커넥터)
 
-1. claude.ai의 커넥터 설정에서 "커스텀 커넥터 추가"를 선택합니다.
-2. 이름(예: `ai-debate`)과 서비스 주소를 입력하고 연결합니다. OAuth 클라이언트 ID·시크릿 칸은 비워 둡니다(클라이언트가 자체 등록 방식으로 연결).
-3. 열리는 화면에서 로그인한 뒤, 동의 화면에서 "Claude용"을 선택하고 허용합니다.
+1. 연결 설정 화면의 **Claude에 연결**을 누르면 claude.ai의 "커스텀 커넥터 추가" 대화상자가 이름(`AI Debate Hub`)·서비스 주소가 채워진 채로 새 탭에 열립니다. 거기서 "추가"를 누릅니다.
+   - 직접 등록할 때는 claude.ai 커넥터 설정에서 "커스텀 커넥터 추가"를 고르고 이름과 서비스 주소를 넣습니다. OAuth 클라이언트 ID·시크릿 칸은 비워 둡니다(클라이언트가 자체 등록 방식으로 연결).
+2. 열리는 화면에서 로그인한 뒤, 동의 화면에서 허용합니다.
 4. 토론할 채팅에서 해당 커넥터를 켭니다.
 
 - Claude는 사용자 PC가 아니라 Anthropic 클라우드에서 서버에 접속하므로, 서버는 공개 HTTPS 주소여야 합니다.
 - Free 플랜은 커스텀 커넥터 1개로 제한됩니다.
 
 ## Codex
+
+### Codex 앱 (플러그인)
+
+연결 설정 화면의 **Codex에 연결**을 누르면 3단계 안내가 열립니다.
+
+1. **Codex 플러그인 화면 열기**(`codex://plugins`)로 Codex 앱의 플러그인 화면을 엽니다.
+2. **관리 > 마켓플레이스** 탭에서 **마켓플레이스 추가**를 누르고 출처 `rmia4/ai_debate_hub`, Git ref `plugin/codex`를 입력합니다(복사 버튼 제공). Sparse 경로는 비워 둡니다.
+3. **AI Debate Hub 플러그인 열기**(`codex://plugins/install/ai-debate?marketplace=ai-debate-local`)로 설치하고, 로그인·동의 화면에서 허용합니다.
+
+- 마켓플레이스를 추가하지 않았으면 3단계 링크도 플러그인 화면만 엽니다. 1→2→3 순서를 지킵니다.
+- 이 경로는 저장소의 `plugin/codex` 브랜치에 플러그인 패키지(`plugin.json`, `mcp.json`, `.agents/plugins/marketplace.json`)가 있어야 동작합니다.
+
+### Codex CLI (연결 설정 화면에는 안내하지 않음)
+
+일반 사용자는 CLI가 없으므로 화면에는 Codex 앱 경로만 보입니다. CLI 사용자는 다음처럼 직접 등록합니다.
 
 `~/.codex/config.toml`에 다음을 추가합니다.
 
@@ -21,25 +36,25 @@
 url = "https://<서비스 주소>/mcp"
 ```
 
-등록 후 터미널에서 다음을 실행하고, 열리는 브라우저에서 로그인한 뒤 동의 화면에서 "Codex용"을 선택합니다.
+등록 후 터미널에서 다음을 실행하고, 열리는 브라우저에서 로그인한 뒤 동의 화면에서 허용합니다.
 
 ```bash
 codex mcp login ai-debate
 ```
 
 - 연결 후 Codex에서 `/mcp`로 서버와 도구 목록이 보이는지 확인합니다.
-- 플러그인 형태 배포는 필요 없습니다. 위 설정만으로 충분합니다.
 
 출처: [Claude 커스텀 커넥터 도움말](https://support.claude.com/en/articles/11503834-building-custom-connectors-via-remote-mcp-servers), [Claude 커스텀 커넥터 시작하기](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp), [Codex MCP 문서](https://developers.openai.com/codex/mcp)
 
 ## AI용 초기 지시문
 
-웹에서 토론방을 만들면 아래 지시문이 참여자별로 채워져 표시됩니다. 복사 버튼으로 각 채팅에 붙여 넣으면 됩니다. `{discussion_id}`, `{me}`, `{topic}`, `{context}`는 서버가 채웁니다.
+웹에서 토론방을 만들면 아래 지시문이 자리(A석·B석)별로 채워져 표시됩니다. 복사 버튼으로 토론할 두 채팅에 하나씩 붙여 넣으면 됩니다. `{discussion_id}`, `{seat}`(`A`/`B`), `{topic}`, `{context}`는 서버가 채웁니다.
 
 ### 동시 방식
 
 ```text
-너는 ai-debate 토론 {discussion_id}에 "{me}"로 참여한다. 진행 방식은 동시 방식이다. (참여자 역할은 서버가 OAuth 연결 정보로 판별한다.)
+너는 ai-debate 토론 {discussion_id}에 {seat}석으로 참여한다. 진행 방식은 동시 방식이다.
+get_state와 submit을 호출할 때 seat에는 항상 "{seat}"를 넣는다. 상대 자리의 값을 넣지 않는다.
 주제: {topic}
 배경: {context}
 
@@ -58,7 +73,8 @@ codex mcp login ai-debate
 ### 순차 방식
 
 ```text
-너는 ai-debate 토론 {discussion_id}에 "{me}"로 참여한다. 진행 방식은 순차 방식이다. (참여자 역할은 서버가 OAuth 연결 정보로 판별한다.)
+너는 ai-debate 토론 {discussion_id}에 {seat}석으로 참여한다. 진행 방식은 순차 방식이다.
+get_state와 submit을 호출할 때 seat에는 항상 "{seat}"를 넣는다. 상대 자리의 값을 넣지 않는다.
 주제: {topic}
 배경: {context}
 

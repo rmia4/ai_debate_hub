@@ -4,14 +4,14 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { Db } from '../db/db.js';
-import { currentProposal, DiscussionError, discussionsFor, type Discussion, type Turn } from '../db/discussions.js';
-import type { Participant } from '../oauth/connections.js';
+import { currentProposal, DiscussionError, discussionsFor, PARTICIPANTS, type Discussion, type Participant, type Turn } from '../db/discussions.js';
 import { instructionFor } from '../instructions.js';
 import type { Caller } from './caller.js';
 
 const RULE = '쉽게 동의하지 말고 근거를 제시할 것.';
 
 const discussionId = z.string().max(64).describe('토론 ID');
+const seat = z.enum(['A', 'B']).describe('지시문에 적힌 내 자리(A 또는 B). 토론 내내 같은 값을 쓴다');
 
 const json = (value: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
 const fail = (error: string, message: string, extra: object = {}): CallToolResult => ({
@@ -28,7 +28,7 @@ async function run(fn: () => Promise<CallToolResult>): Promise<CallToolResult> {
   }
 }
 
-const opponentOf = (me: Participant): Participant => (me === 'claude' ? 'codex' : 'claude');
+const opponentOf = (me: Participant): Participant => (me === 'A' ? 'B' : 'A');
 
 // MCP 조회 경로의 공개 규칙: 진행 중이면 완료된 라운드만 보인다. 순차 방식은 제출마다 턴이 넘어가므로 모두 보인다.
 const visibleTurns = (d: Discussion, turns: Turn[]) => (d.status === 'active' ? turns.filter((t) => t.round < d.current_round) : turns);
@@ -38,6 +38,7 @@ function formatTurn(d: Discussion, t: Turn) {
     id: t.id,
     [d.mode === 'parallel' ? 'round' : 'turn']: t.round,
     participant: t.participant,
+    client_name: t.client_name,
     content: t.content,
     proposal: t.proposal,
     ...(d.mode === 'parallel' ? { agreement: t.agreement, accepted_proposal_id: t.accepted_proposal_id } : { sign: t.sign }),
@@ -124,7 +125,6 @@ function nextStep(d: Discussion, turns: Turn[], me: Participant) {
 function buildServer(caller: Caller, db: Db): McpServer {
   const server = new McpServer({ name: 'ai-debate-hub', version: '0.1.0' });
   const repo = discussionsFor(db, caller.userId);
-  const me = caller.participant;
 
   server.registerTool(
     'start_discussion',
@@ -146,7 +146,7 @@ function buildServer(caller: Caller, db: Db): McpServer {
           mode: d.mode,
           max_rounds: d.max_rounds,
           min_rounds: d.min_rounds,
-          instructions: { claude: instructionFor(d, 'claude'), codex: instructionFor(d, 'codex') },
+          instructions: Object.fromEntries(PARTICIPANTS.map((p) => [p, instructionFor(d, p)])),
         });
       }),
   );
@@ -155,9 +155,9 @@ function buildServer(caller: Caller, db: Db): McpServer {
     'get_state',
     {
       description: `토론의 현재 상태, 내 차례 여부, 직전 답변과 합의 후보를 조회한다. 진행 중인 라운드의 상대 답변은 보이지 않는다. ${RULE}`,
-      inputSchema: { discussion_id: discussionId },
+      inputSchema: { discussion_id: discussionId, seat },
     },
-    ({ discussion_id }) =>
+    ({ discussion_id, seat: me }) =>
       run(async () => {
         const { discussion, turns } = await repo.get(discussion_id);
         return json(stateView(discussion, turns, me));
@@ -174,6 +174,7 @@ function buildServer(caller: Caller, db: Db): McpServer {
         '응답을 받지 못했으면 같은 expected_round와 같은 내용으로 다시 보내면 된다.',
       inputSchema: {
         discussion_id: discussionId,
+        seat,
         expected_round: z.number().int().min(1).max(20).describe('get_state의 current_round(순차 방식은 current_turn)'),
         content: z.string().min(1).max(8000).describe('답변 본문: 검토·반박·근거'),
         proposal: z.string().min(1).max(4000).optional().describe('이 답변이 제시하는 최종안 본문'),
@@ -183,9 +184,9 @@ function buildServer(caller: Caller, db: Db): McpServer {
         sign: z.boolean().optional().describe('순차 방식만: 현재 합의안을 수정 없이 받아들이면 true'),
       },
     },
-    ({ discussion_id, ...input }) =>
+    ({ discussion_id, seat: me, ...input }) =>
       run(async () => {
-        const r = await repo.submit(discussion_id, me, input);
+        const r = await repo.submit(discussion_id, me, caller.clientName, input);
         if (r.outcome === 'conflict') {
           return fail('already_submitted', '이미 제출됨, 수정되지 않음', { submission: formatTurn(r.discussion, r.turn) });
         }

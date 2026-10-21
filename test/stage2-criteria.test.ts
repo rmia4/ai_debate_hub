@@ -36,13 +36,13 @@ afterAll(async () => {
   await s?.close();
 });
 
-const connectClaude = (browser: Browser) => connect(s, { clientId: claudeClient, redirectUri: CLAUDE_CB, participant: 'claude', browser });
-const connectCodex = (browser: Browser) => connect(s, { clientId: codexClient, redirectUri: CODEX_CB, participant: 'codex', browser });
+const connectClaude = (browser: Browser) => connect(s, { clientId: claudeClient, redirectUri: CLAUDE_CB, browser });
+const connectCodex = (browser: Browser) => connect(s, { clientId: codexClient, redirectUri: CODEX_CB, browser });
 
-async function connectionOf(userId: string, participant: string) {
+async function connectionOf(userId: string, clientId: string) {
   const { rows } = await s.db.query<{ id: string; grant_id: string; revoked_at: Date | null; revoke_reason: string | null }>(
-    `SELECT id, grant_id, revoked_at, revoke_reason FROM oauth_connections WHERE user_id = $1 AND participant = $2 ORDER BY id DESC LIMIT 1`,
-    [userId, participant],
+    `SELECT id, grant_id, revoked_at, revoke_reason FROM oauth_connections WHERE user_id = $1 AND client_id = $2 ORDER BY id DESC LIMIT 1`,
+    [userId, clientId],
   );
   return rows[0];
 }
@@ -51,7 +51,7 @@ const setStatus = (userId: string, status: 'active' | 'suspended') =>
   s.db.query(`UPDATE users SET status = $2 WHERE id = $1`, [userId, status]);
 
 describe('두 계정의 Claude·Codex가 서로 다른 사용자로 판별', () => {
-  it('GitHub 계정과 Google 계정의 네 연결이 각자 (사용자, 역할)로 판별된다', async () => {
+  it('GitHub 계정과 Google 계정의 네 연결이 각자 (사용자, 앱)으로 판별된다', async () => {
     const alice = await loginAs(s, { provider: 'github', id: '1001', name: 'Alice' });
     const bob = await loginAs(s, { provider: 'google', id: 'g-2002', name: 'Bob', email: 'bob@example.com' });
     expect(alice.userId).not.toBe(bob.userId);
@@ -62,10 +62,10 @@ describe('두 계정의 Claude·Codex가 서로 다른 사용자로 판별', () 
       bobClaude: await connectClaude(bob.browser),
       bobCodex: await connectCodex(bob.browser),
     };
-    expect((await callGetState(s, tokens.aliceClaude.access_token)).state).toMatchObject({ user: alice.userId, me: 'claude' });
-    expect((await callGetState(s, tokens.aliceCodex.access_token)).state).toMatchObject({ user: alice.userId, me: 'codex' });
-    expect((await callGetState(s, tokens.bobClaude.access_token)).state).toMatchObject({ user: bob.userId, me: 'claude' });
-    expect((await callGetState(s, tokens.bobCodex.access_token)).state).toMatchObject({ user: bob.userId, me: 'codex' });
+    expect((await callGetState(s, tokens.aliceClaude.access_token)).state).toMatchObject({ user: alice.userId, app: 'Claude' });
+    expect((await callGetState(s, tokens.aliceCodex.access_token)).state).toMatchObject({ user: alice.userId, app: 'Codex CLI' });
+    expect((await callGetState(s, tokens.bobClaude.access_token)).state).toMatchObject({ user: bob.userId, app: 'Claude' });
+    expect((await callGetState(s, tokens.bobCodex.access_token)).state).toMatchObject({ user: bob.userId, app: 'Codex CLI' });
   });
 
   it('같은 브라우저에서 로그아웃 후 다른 계정으로 로그인하면 새 계정으로 연결된다', async () => {
@@ -77,12 +77,12 @@ describe('두 계정의 Claude·Codex가 서로 다른 사용자로 판별', () 
     const dan = await loginAs(s, 'dan', carol.browser);
     const t = await connectClaude(carol.browser);
     expect(t.consentPage).toContain('dan</b> 계정으로');
-    expect((await callGetState(s, t.access_token)).state).toMatchObject({ user: dan.userId, me: 'claude' });
+    expect((await callGetState(s, t.access_token)).state).toMatchObject({ user: dan.userId, app: 'Claude' });
   });
 });
 
 describe('연결 해제·교체 후 기존 액세스 토큰 즉시 거부', () => {
-  it('같은 역할로 다시 연결하면(교체) 기존 토큰이 즉시 거부된다', async () => {
+  it('같은 앱으로 다시 연결하면(교체) 기존 토큰이 즉시 거부된다', async () => {
     const u = await loginAs(s, 'replace-user');
     const old = await connectClaude(u.browser);
     const fresh = await connectClaude(u.browser);
@@ -90,21 +90,21 @@ describe('연결 해제·교체 후 기존 액세스 토큰 즉시 거부', () =
     expect((await callGetState(s, old.access_token)).status).toBe(401);
     expect((await refresh(s, claudeClient, old.refresh_token)).status).toBe(400);
     expect((await callGetState(s, fresh.access_token)).status).toBe(200);
-    expect(await activeConnectionCount(s, u.userId, 'claude')).toBe(1);
+    expect(await activeConnectionCount(s, u.userId, claudeClient)).toBe(1);
   });
 
-  it('연결 설정 화면에서 해제하면 토큰이 즉시 거부되고 다른 역할 연결은 남는다', async () => {
+  it('연결 설정 화면에서 해제하면 토큰이 즉시 거부되고 다른 앱 연결은 남는다', async () => {
     const u = await loginAs(s, 'revoke-user');
     const claude = await connectClaude(u.browser);
     const codex = await connectCodex(u.browser);
-    const conn = await connectionOf(u.userId, 'claude');
+    const conn = await connectionOf(u.userId, claudeClient);
     const page = await (await u.browser.request(`${s.baseUrl}/app/connections`)).text();
 
     const res = await u.browser.request(`${s.baseUrl}/app/connections/${conn.id}/revoke`, u.browser.form({ csrf: csrfFrom(page) }));
     expect(res.status).toBe(303);
     expect((await callGetState(s, claude.access_token)).status).toBe(401);
     expect((await refresh(s, claudeClient, claude.refresh_token)).json.error).toBe('invalid_grant');
-    expect((await connectionOf(u.userId, 'claude')).revoke_reason).toBe('user_revoked');
+    expect((await connectionOf(u.userId, claudeClient)).revoke_reason).toBe('user_revoked');
     expect((await callGetState(s, codex.access_token)).status).toBe(200);
   });
 });
@@ -119,7 +119,7 @@ describe('리프레시 토큰 재사용 시 연결 전체 폐기', () => {
 
     const reuse = await refresh(s, claudeClient, t0.refresh_token);
     expect(reuse).toMatchObject({ status: 400, json: { error: 'invalid_grant' } });
-    expect((await connectionOf(u.userId, 'claude')).revoke_reason).toBe('grant_revoked');
+    expect((await connectionOf(u.userId, claudeClient)).revoke_reason).toBe('grant_revoked');
     expect((await callGetState(s, r2.json.access_token)).status).toBe(401);
     expect((await refresh(s, claudeClient, r2.json.refresh_token)).status).toBe(400);
   });
@@ -133,7 +133,7 @@ describe('리프레시 토큰 재사용 시 연결 전체 폐기', () => {
       [REFRESH_GRACE_SECONDS + 1, t0.refresh_token],
     );
     expect((await refresh(s, claudeClient, t0.refresh_token)).status).toBe(400);
-    expect((await connectionOf(u.userId, 'claude')).revoked_at).not.toBeNull();
+    expect((await connectionOf(u.userId, claudeClient)).revoked_at).not.toBeNull();
     expect((await callGetState(s, r1.json.access_token)).status).toBe(401);
   });
 });
@@ -153,7 +153,7 @@ describe('정상적인 동시 갱신·응답 유실 재시도 처리', () => {
     const next = await refresh(s, claudeClient, retry.json.refresh_token);
     expect(next.status).toBe(200);
     expect((await callGetState(s, next.json.access_token)).status).toBe(200);
-    expect((await connectionOf(u.userId, 'claude')).revoked_at).toBeNull();
+    expect((await connectionOf(u.userId, claudeClient)).revoked_at).toBeNull();
   });
 
   it('같은 리프레시 토큰으로 동시에 갱신해도 서버 오류 없이 모두 성공하고, 살아남는 리프레시 토큰은 하나다', async () => {
@@ -171,14 +171,14 @@ describe('정상적인 동시 갱신·응답 유실 재시도 처리', () => {
     expect(rows).toHaveLength(1);
     const survivor = results.find((r) => r.json.refresh_token === rows[0].id)!;
     expect((await refresh(s, claudeClient, survivor.json.refresh_token)).status).toBe(200);
-    expect((await connectionOf(u.userId, 'claude')).revoked_at).toBeNull();
+    expect((await connectionOf(u.userId, claudeClient)).revoked_at).toBeNull();
   });
 });
 
 describe('인가 코드 동시 교환 시 한 번만 성공', () => {
   it('동시에 교환하면 하나만 토큰을 받고 나머지는 invalid_grant', async () => {
     const u = await loginAs(s, 'code-race-user');
-    const a = await authorize(s, { clientId: claudeClient, redirectUri: CLAUDE_CB, participant: 'claude', browser: u.browser });
+    const a = await authorize(s, { clientId: claudeClient, redirectUri: CLAUDE_CB, browser: u.browser });
     const results = await Promise.all([1, 2, 3].map(() => exchangeCode(s, claudeClient, CLAUDE_CB, a.code, a.verifier)));
     expect(results.filter((r) => r.status === 200)).toHaveLength(1);
     expect(results.filter((r) => r.status === 400).map((r) => r.json.error)).toEqual(['invalid_grant', 'invalid_grant']);
@@ -202,7 +202,7 @@ describe('30일 만료 후 재연결 요구', () => {
   it('30일이 지나면 액세스·리프레시 토큰이 모두 거부되고 다시 연결하면 쓸 수 있다', async () => {
     const u = await loginAs(s, 'expired-user');
     const t0 = await connectClaude(u.browser);
-    const conn = await connectionOf(u.userId, 'claude');
+    const conn = await connectionOf(u.userId, claudeClient);
     // 30일 경과: 연결과 그 연결에서 나온 토큰의 만료 시각을 과거로 돌린다
     await s.db.query(`UPDATE oauth_connections SET expires_at = now() - interval '1 second' WHERE id = $1`, [conn.id]);
     expect((await callGetState(s, t0.access_token)).status).toBe(401);
@@ -218,14 +218,14 @@ describe('30일 만료 후 재연결 요구', () => {
   });
 });
 
-describe('동시 재연결 후 같은 사용자·역할의 미폐기 연결이 1개만 남음', () => {
-  it('세 브라우저에서 동시에 같은 역할로 동의해도 미폐기 연결은 1개이고 토큰은 그 연결만 받는다', async () => {
+describe('동시 재연결 후 같은 사용자·앱의 미폐기 연결이 1개만 남음', () => {
+  it('세 브라우저에서 동시에 같은 앱으로 동의해도 미폐기 연결은 1개이고 토큰은 그 연결만 받는다', async () => {
     // 테스트 브라우저는 쿠키 경로를 구분하지 않으므로 동시 인가는 브라우저를 나눠서 한다
     const logins = await Promise.all([1, 2, 3].map(() => loginAs(s, 'race-user', new Browser())));
     const userId = logins[0].userId;
     const flows = await Promise.all(logins.map(({ browser }) => startAuthorize(s, { clientId: claudeClient, redirectUri: CLAUDE_CB, browser })));
-    const codes = await Promise.all(flows.map((f) => submitConsent(f, CLAUDE_CB, 'claude')));
-    expect(await activeConnectionCount(s, userId, 'claude')).toBe(1);
+    const codes = await Promise.all(flows.map((f) => submitConsent(f, CLAUDE_CB)));
+    expect(await activeConnectionCount(s, userId, claudeClient)).toBe(1);
 
     // 교체당한 쪽은 코드를 못 받거나(동의 화면이 다시 뜸), 받은 코드가 거부된다
     const exchanged = await Promise.all(
@@ -241,14 +241,14 @@ describe('만료됐지만 미폐기인 연결이 있어도 재연결 성공', ()
   it('만료된 기존 연결은 재연결 때 폐기되고 새 연결이 만들어진다', async () => {
     const u = await loginAs(s, 'stale-user');
     await connectClaude(u.browser);
-    const stale = await connectionOf(u.userId, 'claude');
+    const stale = await connectionOf(u.userId, claudeClient);
     await s.db.query(`UPDATE oauth_connections SET expires_at = now() - interval '1 day' WHERE id = $1`, [stale.id]);
 
     const fresh = await connectClaude(u.browser);
     expect((await callGetState(s, fresh.access_token)).status).toBe(200);
     const { rows } = await s.db.query<{ revoke_reason: string }>(`SELECT revoke_reason FROM oauth_connections WHERE id = $1`, [stale.id]);
     expect(rows[0].revoke_reason).toBe('replaced');
-    expect(await activeConnectionCount(s, u.userId, 'claude')).toBe(1);
+    expect(await activeConnectionCount(s, u.userId, claudeClient)).toBe(1);
   });
 });
 
@@ -260,7 +260,7 @@ describe('계정 정지와 해제', () => {
     const leaver = await loginAs(s, account, new Browser());
     const claude = await connectClaude(main.browser);
     // 코드만 받고 아직 교환하지 않은 Codex 연결
-    const pending = await authorize(s, { clientId: codexClient, redirectUri: CODEX_CB, participant: 'codex', browser: other.browser });
+    const pending = await authorize(s, { clientId: codexClient, redirectUri: CODEX_CB, browser: other.browser });
 
     await setStatus(main.userId, 'suspended');
 
@@ -282,19 +282,19 @@ describe('계정 정지와 해제', () => {
     const flow = await startAuthorize(s, { clientId: claudeClient, redirectUri: CLAUDE_CB, browser: main.browser });
     expect(flow.consentStatus).toBe(403);
     expect(flow.consentPage).toContain('이용이 정지된 계정');
-    const consent = await main.browser.request(`${flow.consentUrl}/consent`, main.browser.form({ participant: 'claude', csrf: csrfFrom(suspendedHtml) }));
+    const consent = await main.browser.request(`${flow.consentUrl}/consent`, main.browser.form({ csrf: csrfFrom(suspendedHtml) }));
     expect(consent.status).toBe(403);
     // 토큰 발급: 갱신·코드 교환
     expect((await refresh(s, claudeClient, claude.refresh_token)).json.error).toBe('invalid_grant');
     expect((await exchangeCode(s, codexClient, CODEX_CB, pending.code, pending.verifier)).json.error).toBe('invalid_grant');
     // 정지는 연결을 폐기하지 않는다
-    expect((await connectionOf(main.userId, 'claude')).revoked_at).toBeNull();
+    expect((await connectionOf(main.userId, claudeClient)).revoked_at).toBeNull();
     // 로그아웃은 된다
     const leaverPage = await (await leaver.browser.request(`${s.baseUrl}/app/connections`)).text();
     expect((await leaver.browser.request(`${s.baseUrl}/logout`, leaver.browser.form({ csrf: csrfFrom(leaverPage) }))).status).toBe(303);
 
     // 정지 중에 만료·폐기된 정보
-    expect(await revokeConnection(s.db, main.userId, (await connectionOf(main.userId, 'codex')).id)).toBe(true);
+    expect(await revokeConnection(s.db, main.userId, (await connectionOf(main.userId, codexClient)).id)).toBe(true);
     await expireSessionOf(other.browser);
 
     await setStatus(main.userId, 'active');
@@ -308,7 +308,7 @@ describe('계정 정지와 해제', () => {
     // 만료된 세션, 폐기된 연결, 로그아웃한 세션은 되살아나지 않는다
     expect((await other.browser.request(`${s.baseUrl}/app/connections`)).status).toBe(303);
     expect((await leaver.browser.request(`${s.baseUrl}/app/connections`)).status).toBe(303);
-    expect((await connectionOf(main.userId, 'codex')).revoke_reason).toBe('user_revoked');
+    expect((await connectionOf(main.userId, codexClient)).revoke_reason).toBe('user_revoked');
     expect((await exchangeCode(s, codexClient, CODEX_CB, pending.code, pending.verifier)).status).toBe(400);
   });
 });

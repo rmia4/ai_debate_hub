@@ -119,12 +119,15 @@ describe('연결 설정 화면', () => {
     const owner = await loginAs(s, 'owner');
     const intruder = await loginAs(s, 'intruder');
     const c = await registerClient(s, CLAUDE_CB, 'Claude');
-    await connect(s, { clientId: c.client_id, redirectUri: CLAUDE_CB, participant: 'claude', browser: owner.browser });
+    await connect(s, { clientId: c.client_id, redirectUri: CLAUDE_CB, browser: owner.browser });
     const { rows } = await s.db.query<{ id: string }>(`SELECT id FROM oauth_connections WHERE user_id = $1`, [owner.userId]);
     const id = rows[0].id;
 
     const { html } = await appPage(owner.browser);
-    expect(html).toContain('Claude용');
+    expect(html).toContain('<td>Claude</td>');
+    expect(html).toContain('https://claude.ai/customize/connectors?modal=add-custom-connector&amp;connectorName=AI+Debate+Hub&amp;connectorUrl=');
+    expect(html).toContain('data-dialog="codex-connect"');
+    expect(html).toContain('codex://plugins/install/ai-debate?marketplace=ai-debate-local');
     expect(html).toContain(`/app/connections/${id}/revoke`);
     expect(html).toContain(s.config.resource);
 
