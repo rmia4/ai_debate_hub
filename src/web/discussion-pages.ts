@@ -331,7 +331,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
 
       res.send(
         page(
-          '내 토론',
+          '토론 목록',
           `<div class="split">
           <aside class="side">
             <a class="btn fill" href="/app/new">새 토론방</a>

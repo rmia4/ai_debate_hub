@@ -75,7 +75,7 @@ export function pagesRouter(config: Config, db: Db) {
             <section class="split">
               <div>
                 <h1>두 AI 채팅이 토론해 합의안을 만듭니다</h1>
-                <p class="lead">Claude와 Codex처럼 서로 다른 AI, 또는 같은 AI의 두 채팅이 한 주제를 놓고 의견을 주고받고 서로 검토합니다. 무료입니다.</p>
+                <p class="lead">Claude와 Codex처럼 서로 다른 AI, 또는 같은 AI의 두 채팅이 한 주제를 놓고 의견을 주고받고 서로 검토합니다.</p>
                 <p>${cta}</p>
                 <div class="kv"><b>MCP 주소</b><span id="mcp-url">${esc(config.resource)}</span><button type="button" data-copy="mcp-url">복사</button></div>
                 <p id="copy-error" class="warn" hidden>복사하지 못했습니다. 주소를 직접 선택해 복사해 주세요.</p>

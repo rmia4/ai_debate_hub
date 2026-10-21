@@ -6,7 +6,7 @@ const STYLE = `:root{color-scheme:light dark;--bg:#f4f5f2;--panel:#fff;--fg:#1b1
 --mono:ui-monospace,"Cascadia Code",Consolas,monospace}
 @media (prefers-color-scheme:dark){:root{--bg:#0c0e0c;--panel:#121512;--fg:#d6dcd3;--mute:#7f877c;--line:#2b302a;--acc:#4ade80;--hl:#13261a;--b:#fbbf24;--dot:#1f231e}}
 *{box-sizing:border-box}
-body{margin:0;background:radial-gradient(var(--dot) 1px,transparent 1.2px) 0 0/18px 18px,var(--bg);color:var(--fg);
+body{margin:0;min-height:100vh;display:flex;flex-direction:column;background:radial-gradient(var(--dot) 1px,transparent 1.2px) 0 0/18px 18px,var(--bg);color:var(--fg);
 font-family:system-ui,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;font-size:.95rem;line-height:1.7}
 html{scrollbar-gutter:stable}
 .wrap{max-width:68rem;margin:0 auto;padding:2.5rem 2rem}
@@ -43,7 +43,8 @@ dialog{background:var(--panel);color:var(--fg);border:1px solid var(--line);max-
 .topbar nav{margin:0;align-items:center}.topbar form{display:inline}
 .topbar nav button{font:inherit;min-height:0;padding:0;border:0;color:var(--mute);background:none}.topbar nav button:hover{background:none;color:var(--acc)}
 .topbar nav button::before{content:"[";color:var(--line)}.topbar nav button::after{content:"]";color:var(--line)}
-footer{font-family:var(--mono);font-size:.78rem;color:var(--mute);border-top:1px dashed var(--line);padding:1rem;text-align:center}footer a{color:inherit}
+body>main{flex:1 0 auto;width:100%}
+footer{flex:none;height:3.2rem;line-height:3.2rem;padding:0 1rem;white-space:nowrap;overflow:hidden;font-family:var(--mono);font-size:.78rem;color:var(--mute);border-top:1px dashed var(--line);text-align:center}footer a{color:inherit}
 @media (max-width:640px){.cols{grid-template-columns:1fr}h1{font-size:1.6rem}}
 @media (max-width:760px){.topbar{padding:.7rem 1rem}.wrap{padding:1.5rem 1rem}}`;
 
