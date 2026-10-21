@@ -70,7 +70,7 @@ function turnBox(t: Turn, d: Discussion, changes: IssueChange[] = []) {
     d.agreed_proposal_id === t.id ? '<span class="badge ok">합의된 안</span>' : '',
   ].join(' ');
   const app = t.client_name ? ` <small>${esc(t.client_name)}</small>` : '';
-  return `<div class="turn" id="t${esc(t.id)}"><p><b>${PARTICIPANT_NAME[t.participant]}</b>${app} <small>#${esc(t.id)} · ${formatTime(t.created_at)}</small> ${badges}</p>
+  return `<div class="turn seat-${t.participant}" id="t${esc(t.id)}"><p><b>${PARTICIPANT_NAME[t.participant]}</b>${app} <small>#${esc(t.id)} · ${formatTime(t.created_at)}</small> ${badges}</p>
     ${renderMarkdown(t.content)}
     ${t.proposal ? `<p><b>제안 #${esc(t.id)}</b></p>${renderMarkdown(t.proposal)}` : ''}
     ${changes.length ? `<p>쟁점 변경</p><ul>${changes.map(issueChangeItem).join('')}</ul>` : ''}
@@ -88,7 +88,7 @@ function parallelRecord(d: Discussion, turns: Turn[], ledger: IssueLedger) {
     const agreed = d.status === 'agreed' && r === d.current_round;
     const cell = (p: (typeof PARTICIPANTS)[number]) => {
       const t = inRound.find((x) => x.participant === p);
-      return t ? turnBox(t, d, ledger.changesByTurn[t.id]) : `<div class="turn"><b>${PARTICIPANT_NAME[p]}</b> <small>아직 제출 안 함</small></div>`;
+      return t ? turnBox(t, d, ledger.changesByTurn[t.id]) : `<div class="turn seat-${p}"><b>${PARTICIPANT_NAME[p]}</b> <small>아직 제출 안 함</small></div>`;
     };
     rows.push(`<h3>라운드 ${r}${ongoing ? ' <span class="badge">진행 중</span>' : ''}${agreed ? ' <span class="badge ok">합의</span>' : ''}</h3>
       <div class="cols">${PARTICIPANTS.map(cell).join('')}</div>`);

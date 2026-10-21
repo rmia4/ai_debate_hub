@@ -1,18 +1,52 @@
 export const esc = (s: unknown) =>
   String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-export const page = (title: string, body: string) => `<!doctype html>
+// 터미널 테마. 고정폭 글꼴은 기호·라벨·번호·주소에만 쓰고 한글은 일반 글꼴로 둔다(DESIGN_MEMORY.md).
+const STYLE = `:root{color-scheme:light dark;--bg:#f4f5f2;--panel:#fff;--fg:#1b1f1a;--mute:#6a7068;--line:#c9cdc4;--acc:#16794a;--hl:#e3f3e9;--b:#a3480b;--dot:#cfd3cb;
+--mono:ui-monospace,"Cascadia Code",Consolas,monospace}
+@media (prefers-color-scheme:dark){:root{--bg:#0c0e0c;--panel:#121512;--fg:#d6dcd3;--mute:#7f877c;--line:#2b302a;--acc:#4ade80;--hl:#13261a;--b:#fbbf24;--dot:#1f231e}}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(var(--dot) 1px,transparent 1.2px) 0 0/18px 18px,var(--bg);color:var(--fg);
+font-family:system-ui,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;font-size:.95rem;line-height:1.7}
+.wrap{max-width:56rem;margin:0 auto;padding:2.5rem 1rem}
+h1{font-size:2rem;font-weight:800;line-height:1.35;letter-spacing:-.02em;margin:0 0 1rem}
+h1::before{content:"> ";font-family:var(--mono);color:var(--acc)}
+h2{font-size:1.15rem;font-weight:700;margin:2.2rem 0 .9rem}h2::before{content:"## ";font-family:var(--mono);color:var(--mute);font-weight:400}
+h3{font-size:1rem;margin:1.6rem 0 .6rem}
+a{color:var(--acc)}
+nav{font-family:var(--mono);font-size:.85rem;margin-bottom:1.5rem;display:flex;flex-wrap:wrap;gap:.3rem 1rem}
+nav a{color:var(--mute);text-decoration:none}nav a::before{content:"[";color:var(--line)}nav a::after{content:"]";color:var(--line)}nav a:hover{color:var(--acc)}
+label{display:block;margin:.75rem 0}
+input,textarea,select{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:2px;padding:.4rem .6rem;max-width:100%}
+input[type=checkbox],input[type=radio]{accent-color:var(--acc)}
+table{border-collapse:collapse;width:100%;background:var(--panel);border:1px solid var(--line)}
+td,th{border-bottom:1px dashed var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}th{font-family:var(--mono);color:var(--mute);font-weight:500;font-size:.8rem}
+button,.btn{display:inline-block;font-family:var(--mono);font-size:.88rem;font-weight:600;padding:.55rem 1rem;min-height:44px;color:var(--acc);border:1px solid var(--acc);border-radius:2px;background:transparent;text-decoration:none;cursor:pointer;transition:background .15s,color .15s}
+.btn::after{content:" →"}
+button:hover,.btn:hover,.btn.fill{background:var(--acc);color:var(--bg)}
+button:focus-visible,.btn:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--acc);outline-offset:3px}
+code,pre{font-family:var(--mono);font-size:.85em;background:var(--hl);padding:.05rem .35rem;overflow-wrap:anywhere}
+pre{padding:.75rem;overflow-x:auto;white-space:pre-wrap;border:1px solid var(--line);background:var(--panel)}
+details{margin:.6rem 0}summary{cursor:pointer;color:var(--mute)}
+dialog{background:var(--panel);color:var(--fg);border:1px solid var(--line);max-width:40rem}dialog::backdrop{background:rgba(0,0,0,.45)}
+.warn{background:var(--panel);border:1px solid var(--b);padding:.75rem 1rem}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.turn{background:var(--panel);border:1px solid var(--line);padding:.5rem .9rem;margin:.5rem 0;overflow-wrap:anywhere}
+.turn.seat-A{border-top:3px solid var(--acc)}.turn.seat-B{border-top:3px solid var(--b)}
+.badge{display:inline-block;font-family:var(--mono);font-size:.8em;color:var(--mute)}.badge::before{content:"["}.badge::after{content:"]"}
+.badge.ok{color:var(--acc)}
+.inline{display:inline}
+.note{color:var(--mute);font-size:.88rem}.note::before{content:"# ";font-family:var(--mono)}
+footer{font-family:var(--mono);font-size:.78rem;color:var(--mute);border-top:1px dashed var(--line);padding:1rem;text-align:center}footer a{color:inherit}
+@media (max-width:640px){.cols{grid-template-columns:1fr}h1{font-size:1.6rem}}`;
+
+// bare: 첫 화면처럼 자체 상단 메뉴와 제목을 쓰는 페이지는 기본 폭 제한과 <h1>을 생략한다
+export const page = (title: string, body: string, opts: { bare?: boolean; head?: string } = {}) => `<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)} · AI Debate Hub</title>
-<style>body{font-family:system-ui,sans-serif;max-width:56rem;margin:3rem auto;padding:0 1rem;line-height:1.6}
-label{display:block;margin:.75rem 0}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:.4rem;text-align:left}
-.warn{background:#fff4e5;border:1px solid #f0b000;padding:.75rem}button,.btn{padding:.5rem 1rem;display:inline-block}
-code,pre{background:#f4f4f4;padding:.1rem .3rem}pre{padding:.75rem;overflow-x:auto;white-space:pre-wrap}footer{margin-top:3rem;font-size:.9em;color:#666}
-nav{margin-bottom:1rem}nav a{margin-right:.75rem}.cols{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
-.turn{border:1px solid #ddd;padding:.5rem .75rem;margin:.5rem 0;overflow-wrap:anywhere}.badge{display:inline-block;padding:0 .4rem;border-radius:.3rem;background:#eef;font-size:.85em}
-.ok{background:#e6f6e6}.inline{display:inline}@media (max-width:640px){.cols{grid-template-columns:1fr}}</style>
+<style>${STYLE}${opts.head ?? ''}</style>
 <script src="/static/app.js" defer></script>
-</head><body><h1>${esc(title)}</h1>${body}
+</head><body>${opts.bare ? body : `<main class="wrap"><h1>${esc(title)}</h1>${body}</main>`}
 <footer><a href="/">처음</a> · <a href="/terms">이용약관</a> · <a href="/privacy">개인정보 처리방침</a></footer></body></html>`;
 
 export const csrfField = (csrf: string) => `<input type="hidden" name="csrf" value="${esc(csrf)}">`;
