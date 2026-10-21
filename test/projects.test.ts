@@ -87,6 +87,7 @@ describe('격리', () => {
       ['get_project', { project_id: pid }],
       ['get_background', { background_id: bid }],
       ['update_background', { background_id: bid, expected_revision: 1, title: '탈취' }],
+      ['delete_background', { background_id: bid }],
       ['add_background', { project_id: pid, kind: 'text', title: 'x' }],
       ['start_discussion', { topic: 't', project_id: pid }],
     ] as const) {
@@ -318,6 +319,27 @@ describe('삭제', () => {
     expect(await count(`SELECT count(*)::int AS n FROM discussions WHERE id = $1`, [id])).toBe(0);
     expect(await count(`SELECT count(*)::int AS n FROM project_backgrounds WHERE project_id = $1`, [pid])).toBe(0);
     expect(await count(`SELECT count(*)::int AS n FROM discussion_backgrounds WHERE discussion_id = $1`, [id])).toBe(0);
+  });
+});
+
+describe('AI 삭제', () => {
+  it('A석·B석 모두 delete_background로 지우며, 웹 삭제와 같은 규칙(in_use·소프트 삭제·실제 삭제)을 따른다', async () => {
+    const u = await user();
+    const pid = await webProject(u);
+    const free = await addId(u, pid, { kind: 'text', title: '참조 없음' });
+    const used = await addId(u, pid, { kind: 'file', title: '참조됨', location: '/srv/a.md' });
+    const { discussion_id: id } = await startIn(u, pid, [used]);
+
+    expect((await tool(u.codex, 'delete_background', { background_id: free })).data).toEqual({ background_id: free, result: 'deleted' });
+    expect(await count(`SELECT count(*)::int AS n FROM project_backgrounds WHERE id = $1`, [free])).toBe(0);
+
+    expect((await tool(u.claude, 'delete_background', { background_id: used })).data.error).toBe('in_use');
+    await closeDiscussion(u, id);
+    expect((await tool(u.claude, 'delete_background', { background_id: used })).data.result).toBe('soft_deleted');
+    expect((await tool(u.claude, 'get_project', { project_id: pid })).data.backgrounds).toEqual([]);
+    expect((await tool(u.claude, 'get_summary', { discussion_id: id })).data.references[0]).toMatchObject({ title: '참조됨', deleted: true });
+    // 이미 지운 항목은 없는 항목
+    expect((await tool(u.claude, 'delete_background', { background_id: used })).data.error).toBe('not_found');
   });
 });
 
