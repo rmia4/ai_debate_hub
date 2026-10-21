@@ -69,7 +69,7 @@ export function pagesRouter(config: Config, db: Db) {
         page(
           'AI Debate Hub',
           `<header class="topbar"><a class="brand" href="/">ai-debate-hub</a>${
-            web ? appNav(web) : '<nav><a href="/terms">이용약관</a><a href="/privacy">개인정보</a><a href="/login">로그인</a></nav>'
+            web ? appNav(web) : '<nav><a href="/login">로그인</a></nav>'
           }</header>
           <main>
             <section class="split">
