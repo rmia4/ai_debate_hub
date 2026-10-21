@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 // Vercel 런타임은 require(esm)을 지원하지 않는다. CJS 의존성이 ESM 전용 패키지를 require하면
@@ -16,5 +16,13 @@ describe('런타임 호환성', () => {
     expect(() =>
       execFileSync(process.execPath, ['--no-experimental-require-module', '--input-type=module', '-e', code], { stdio: 'pipe' }),
     ).not.toThrow();
+  });
+
+  // Vercel은 app → index → server, src/app → src/index → src/server 순서로 진입점을 고르고
+  // 고른 모듈에 기본 내보내기가 없으면 함수가 죽는다. 진입점은 src/index.ts 하나여야 한다.
+  it('Vercel이 src/index.ts보다 먼저 고를 진입점 후보 파일이 없다', () => {
+    const exts = ['js', 'cjs', 'mjs', 'ts', 'cts', 'mts'];
+    const earlier = ['app', 'index', 'server', 'src/app'].flatMap((b) => exts.map((e) => `${b}.${e}`));
+    expect(earlier.filter((f) => existsSync(f))).toEqual([]);
   });
 });
