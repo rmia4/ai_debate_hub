@@ -135,6 +135,30 @@ describe('지시문 없이 참여', () => {
     expect((await u.codex('get_state', {})).data.discussion_id).toBe(first);
   });
 
+  it('list_discussions는 종료된 토론까지 최근 수정 순으로 보여 주고 상태로 거를 수 있으며, 남의 토론은 없다', async () => {
+    const u = await pair();
+    const other = await pair();
+    await start(other.claude, { topic: '남의 토론' });
+    expect((await u.claude('list_discussions', {})).data.discussions).toEqual([]);
+
+    const ended = await start(u.claude, { topic: '지난 토론' });
+    await s.db.query(`UPDATE discussions SET status = 'agreed', ended_at = now(), updated_at = now() - interval '1 hour' WHERE id = $1`, [ended]);
+    const active = await start(u.claude, { topic: '지금 토론' });
+
+    const all = (await u.codex('list_discussions', {})).data.discussions;
+    expect(all.map((d: any) => [d.discussion_id, d.topic, d.status])).toEqual([
+      [active, '지금 토론', 'active'],
+      [ended, '지난 토론', 'agreed'],
+    ]);
+    expect(all[0]).toMatchObject({ mode: 'parallel', project_id: null });
+    expect((await u.claude('list_discussions', { status: 'agreed' })).data.discussions.map((d: any) => d.discussion_id)).toEqual([ended]);
+    expect((await u.claude('get_summary', { discussion_id: ended })).data.topic).toBe('지난 토론');
+
+    // 진행 중인 토론이 없을 때의 안내도 list_discussions를 가리킨다
+    await s.db.query(`UPDATE discussions SET status = 'closed' WHERE id = $1`, [active]);
+    expect((await u.claude('get_state', {})).data.message).toContain('list_discussions');
+  });
+
   it('get_state는 내 제출이 없는 동안에만 방식에 맞는 rules를 보낸다', async () => {
     const u = await pair();
     const id = await start(u.claude);
