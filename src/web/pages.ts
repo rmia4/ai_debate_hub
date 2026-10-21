@@ -5,7 +5,7 @@ import { listConnections, revokeConnection } from '../oauth/connections.js';
 import { loginUrl } from './auth-routes.js';
 import { discussionPagesRouter } from './discussion-pages.js';
 import { projectPagesRouter } from './project-pages.js';
-import { esc, logoutForm, page, suspendedPage } from './html.js';
+import { appNav, esc, page, suspendedPage } from './html.js';
 import { checkCsrf, loadSession, type WebSession } from './session.js';
 
 // Codex 플러그인 마켓플레이스 값. 플러그인 패키지는 이 저장소의 CODEX_PLUGIN_REF 브랜치에 둔다.
@@ -25,9 +25,6 @@ const claudeConnectUrl = (resource: string) =>
 
 // 첫 화면 전용 배치: 위쪽 2열(소개·토론 예시), 소개 3칸, 사용 방법·진행 방식 2열
 const HOME_STYLE = `
-.topbar{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem 1rem;padding:.8rem 2rem;background:var(--panel);border-bottom:1px dashed var(--line)}
-.topbar .brand{margin-right:auto;font-family:var(--mono);font-weight:700;white-space:nowrap}.topbar .brand::before{content:"~/";color:var(--acc)}
-.topbar nav{margin:0}
 .split,.about,.rows{max-width:68rem;margin:0 auto;padding:0 2rem}
 .split{display:grid;grid-template-columns:1fr 1fr;gap:2.5rem;align-items:center;padding-top:3rem;padding-bottom:1.5rem}
 .lead{font-size:1.08rem}
@@ -47,7 +44,7 @@ const HOME_STYLE = `
 .steps li{counter-increment:s;display:flex;gap:1rem;padding:.55rem .9rem;border-bottom:1px solid var(--line)}.steps li:last-child{border:0}
 .steps li::before{content:counter(s,decimal-leading-zero);font-family:var(--mono);color:var(--acc);flex:none}
 @media (max-width:900px){.about{grid-template-columns:1fr}}
-@media (max-width:760px){.split,.rows{grid-template-columns:1fr}.split,.about,.rows{padding-left:1rem;padding-right:1rem}.split{padding-top:1.5rem}.topbar{padding:.7rem 1rem}}`;
+@media (max-width:760px){.split,.rows{grid-template-columns:1fr}.split,.about,.rows{padding-left:1rem;padding-right:1rem}.split{padding-top:1.5rem}}`;
 
 const formatTime = (d: Date | null) =>
   d ? new Date(d).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'medium', timeStyle: 'short' }) : '없음';
@@ -71,14 +68,14 @@ export function pagesRouter(config: Config, db: Db) {
       res.send(
         page(
           'AI Debate Hub',
-          `<header class="topbar"><span class="brand">ai-debate-hub</span><nav><a href="/terms">이용약관</a><a href="/privacy">개인정보</a>${
-            web ? '<a href="/app">내 토론</a>' : '<a href="/login">로그인</a>'
-          }</nav></header>
+          `<header class="topbar"><a class="brand" href="/">ai-debate-hub</a>${
+            web ? appNav(web) : '<nav><a href="/login">로그인</a></nav>'
+          }</header>
           <main>
             <section class="split">
               <div>
                 <h1>두 AI 채팅이 토론해 합의안을 만듭니다</h1>
-                <p class="lead">Claude와 Codex처럼 서로 다른 AI, 또는 같은 AI의 두 채팅이 한 주제를 놓고 의견을 주고받고 서로 검토합니다. 무료입니다.</p>
+                <p class="lead">Claude와 Codex처럼 서로 다른 AI, 또는 같은 AI의 두 채팅이 한 주제를 놓고 의견을 주고받고 서로 검토합니다.</p>
                 <p>${cta}</p>
                 <div class="kv"><b>MCP 주소</b><span id="mcp-url">${esc(config.resource)}</span><button type="button" data-copy="mcp-url">복사</button></div>
                 <p id="copy-error" class="warn" hidden>복사하지 못했습니다. 주소를 직접 선택해 복사해 주세요.</p>
@@ -248,9 +245,8 @@ export function pagesRouter(config: Config, db: Db) {
             </ol>
             <form method="dialog"><button>닫기</button></form>
           </dialog>
-          <p>AI 하나만 연결해도 됩니다. 토론방의 A석·B석 참여 문구를 같은 AI의 두 채팅에 하나씩 입력하면 그 AI끼리 토론합니다. 같은 앱으로 다시 연결하면 기존 연결은 자동으로 해제됩니다.</p>
-          ${logoutForm(web.csrf)}`,
-          { nav: web.user.role },
+          <p>AI 하나만 연결해도 됩니다. 토론방의 A석·B석 참여 문구를 같은 AI의 두 채팅에 하나씩 입력하면 그 AI끼리 토론합니다. 같은 앱으로 다시 연결하면 기존 연결은 자동으로 해제됩니다.</p>`,
+          { nav: web },
         ),
       );
     } catch (e) {

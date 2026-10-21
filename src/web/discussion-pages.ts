@@ -59,8 +59,7 @@ const roundsLabel = (d: Discussion) =>
   d.mode === 'parallel' ? `라운드 ${d.current_round}/${d.max_rounds}` : `턴 ${d.current_round}/${d.max_rounds}`;
 
 // 목록 화면: 왼쪽에 새 토론·상태·프로젝트 필터·사용량, 오른쪽에 토론 표
-const LIST_STYLE = `.wrap{max-width:68rem}
-.split{display:grid;grid-template-columns:14rem 1fr;gap:2rem;align-items:start}.list-scope{margin-top:0}
+const LIST_STYLE = `.split{display:grid;grid-template-columns:14rem 1fr;gap:2rem;align-items:start}.list-scope{margin-top:0}
 .side .btn{display:block;text-align:center}
 .side-nav{font-size:.88rem}
 .side-nav .grp{font-family:var(--mono);color:var(--mute);font-size:.75rem;margin:1.2rem 0 .3rem;letter-spacing:.04em}
@@ -332,7 +331,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
 
       res.send(
         page(
-          '내 토론',
+          '토론 목록',
           `<div class="split">
           <aside class="side">
             <a class="btn fill" href="/app/new">새 토론방</a>
@@ -362,7 +361,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
             }
           </div>
           </div>`,
-          { nav: web.user.role, head: LIST_STYLE },
+          { nav: web, head: LIST_STYLE },
         ),
       );
     } catch (e) {
@@ -380,7 +379,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
     const web = res.locals.web!;
     try {
       const choice = typeof req.query.project === 'string' ? await projectChoice(web.user.id, req.query.project) : null;
-      res.send(page('새 토론방', `${newForm(web.csrf, {}, '', choice)}`, { nav: web.user.role }));
+      res.send(page('새 토론방', `${newForm(web.csrf, {}, '', choice)}`, { nav: web }));
     } catch (e) {
       handle(res, next, e);
     }
@@ -401,7 +400,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
         const choice = typeof body.project_id === 'string' && body.project_id ? await projectChoice(web.user.id, body.project_id, new Set(checkedIds(body))) : null;
         res
           .status(status)
-          .send(page('새 토론방', `${e.code === 'limit_exceeded' ? deleteGuide : ''}${newForm(web.csrf, body, e.message, choice)}`, { nav: web.user.role }));
+          .send(page('새 토론방', `${e.code === 'limit_exceeded' ? deleteGuide : ''}${newForm(web.csrf, body, e.message, choice)}`, { nav: web }));
       } catch (e2) {
         handle(res, next, e2);
       }
@@ -455,7 +454,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
           <p><a href="/app/d/${esc(d.id)}.md">마크다운 내보내기</a></p>
           ${actions}
           ${ended ? '' : instructionsSection(d, project, refs)}`,
-          { nav: web.user.role },
+          { nav: web },
         ),
       );
     } catch (e) {
@@ -511,7 +510,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
           <form method="post" action="/app/account/delete">${csrfField(web.csrf)}
             <label><input type="checkbox" name="confirm" value="yes" required> 기록을 내려받았고 탈퇴합니다</label>
             <button type="submit">회원 탈퇴</button></form>`,
-          { nav: web.user.role },
+          { nav: web },
         ),
       );
     } catch (e) {
