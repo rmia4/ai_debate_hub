@@ -87,6 +87,7 @@ describe('MCP 클라이언트', () => {
     const { tools } = await client.listTools();
     expect(tools.map((x) => x.name).sort()).toEqual([
       'add_background',
+      'delete_background',
       'get_background',
       'get_project',
       'get_state',
