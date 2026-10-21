@@ -44,7 +44,7 @@ type User = Awaited<ReturnType<typeof user>>;
 // 웹에서 프로젝트를 만들고 ID를 돌려준다
 async function webProject(u: User, name = '프로젝트') {
   const res = await u.post('/app/projects/new', { name, description: '설명' });
-  return /^\/app\/p\/(.+)$/.exec(res.headers.get('location') ?? '')?.[1] as string;
+  return /^\/app\?project=(.+)$/.exec(res.headers.get('location') ?? '')?.[1] as string;
 }
 
 const addText = (u: User, projectId: string, title = '메모', body = '메모 본문') =>
@@ -215,7 +215,7 @@ describe('양쪽 수정', () => {
     expect((await tool(u.claude, 'get_background', { background_id: bid })).data.updated_by).toBe(winner);
 
     expect(await (await u.get(`/app/d/${id}`)).text()).toContain('토론 중 수정됨');
-    const projectPage = await (await u.get(`/app/p/${pid}`)).text();
+    const projectPage = await (await u.get(`/app?project=${pid}`)).text();
     expect(projectPage).toContain(winner);
     expect(projectPage).toContain('r4');
 
@@ -363,7 +363,7 @@ describe('소프트 삭제', () => {
     expect((await tool(u.claude, 'get_background', { background_id: text })).data.error).toBe('not_found');
     expect((await tool(u.claude, 'update_background', { background_id: text, expected_revision: 1, body: 'x' })).data.error).toBe('not_found');
     expect((await tool(u.claude, 'start_discussion', { topic: 't', project_id: pid, background_ids: [text] })).data.error).toBe('not_found');
-    expect(await (await u.get(`/app/p/${pid}`)).text()).not.toContain('지울 메모');
+    expect(await (await u.get(`/app?project=${pid}`)).text()).not.toContain('지울 메모');
 
     // 과거 토론의 상세·get_summary·내보내기에는 남는다
     const detail = await (await u.get(`/app/d/${id}`)).text();

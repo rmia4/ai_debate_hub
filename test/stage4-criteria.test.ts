@@ -141,7 +141,7 @@ describe('토론 화면', () => {
 
   it('목록은 진행 중 토론의 차례를 보여 주고, 프로젝트·진행 중·종료 탭으로 거를 수 있다', async () => {
     const u = await user(true);
-    const pid = /^\/app\/p\/(.+)$/.exec((await u.post('/app/projects/new', { name: '목록 프로젝트' })).headers.get('location') ?? '')?.[1];
+    const pid = /^\/app\?project=(.+)$/.exec((await u.post('/app/projects/new', { name: '목록 프로젝트' })).headers.get('location') ?? '')?.[1];
     const { id: half } = await webCreate(u, { topic: '한쪽만 낸 토론' });
     await tool(u.claude, 'submit', { discussion_id: half, expected_round: 1, content: '답변', proposal: '안' });
     await webCreate(u, { topic: '아무도 안 낸 순차 토론', mode: 'sequential' });
@@ -164,6 +164,15 @@ describe('토론 화면', () => {
     const inProject = await (await u.get(`/app?project=${pid}`)).text();
     expect(inProject).toContain('닫은 프로젝트 토론');
     expect(inProject).not.toContain('아무도 안 낸 순차 토론');
+    // 프로젝트 탭은 상세를 접이식 구역으로 그 자리에 보여 준다
+    expect(inProject).toContain('<summary>프로젝트 정보·설정</summary>');
+    expect(inProject).toContain('<summary>배경 항목 (0/');
+    expect(inProject).toContain(`action="/app/p/${pid}/edit"`);
+    expect(inProject).not.toContain('프로젝트 열기');
+    // 예전 단독 상세 주소는 프로젝트 탭으로 넘어간다
+    const old = await u.get(`/app/p/${pid}`);
+    expect(old.status).toBe(302);
+    expect(old.headers.get('location')).toBe(`/app?project=${pid}`);
     // 기본 선택은 "전체"다
     expect(all).toMatch(/class="on" aria-current="page">전체/);
     // 모르는 값은 무시하고 전체를 보여 준다
