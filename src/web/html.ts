@@ -41,12 +41,13 @@ footer{font-family:var(--mono);font-size:.78rem;color:var(--mute);border-top:1px
 @media (max-width:640px){.cols{grid-template-columns:1fr}h1{font-size:1.6rem}}`;
 
 // bare: 첫 화면처럼 자체 상단 메뉴와 제목을 쓰는 페이지는 기본 폭 제한과 <h1>을 생략한다
-export const page = (title: string, body: string, opts: { bare?: boolean; head?: string } = {}) => `<!doctype html>
+// nav: 로그인한 화면의 공통 메뉴. 제목(h1) 위에 둔다
+export const page = (title: string, body: string, opts: { bare?: boolean; head?: string; nav?: 'user' | 'admin' } = {}) => `<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)} · AI Debate Hub</title>
 <style>${STYLE}${opts.head ?? ''}</style>
 <script src="/static/app.js" defer></script>
-</head><body>${opts.bare ? body : `<main class="wrap"><h1>${esc(title)}</h1>${body}</main>`}
+</head><body>${opts.bare ? body : `<main class="wrap">${opts.nav ? appNav(opts.nav) : ''}<h1>${esc(title)}</h1>${body}</main>`}
 <footer><a href="/">처음</a> · <a href="/terms">이용약관</a> · <a href="/privacy">개인정보 처리방침</a></footer></body></html>`;
 
 export const csrfField = (csrf: string) => `<input type="hidden" name="csrf" value="${esc(csrf)}">`;

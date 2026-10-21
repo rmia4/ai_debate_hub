@@ -139,6 +139,37 @@ describe('토론 화면', () => {
     expect(JSON.stringify(state.data)).not.toContain('진행 중 라운드의 클로드 답변');
   });
 
+  it('목록은 진행 중 토론의 차례를 보여 주고, 프로젝트·진행 중·종료 탭으로 거를 수 있다', async () => {
+    const u = await user(true);
+    const pid = /^\/app\/p\/(.+)$/.exec((await u.post('/app/projects/new', { name: '목록 프로젝트' })).headers.get('location') ?? '')?.[1];
+    const { id: half } = await webCreate(u, { topic: '한쪽만 낸 토론' });
+    await tool(u.claude, 'submit', { discussion_id: half, expected_round: 1, content: '답변', proposal: '안' });
+    await webCreate(u, { topic: '아무도 안 낸 순차 토론', mode: 'sequential' });
+    const { id: closed } = await webCreate(u, { topic: '닫은 프로젝트 토론', project_id: pid! });
+    await u.post(`/app/d/${closed}/close`);
+
+    const all = await (await u.get('/app')).text();
+    expect(all).toContain('B석 대기');
+    expect(all).toContain('선공 대기');
+    expect(all).toContain('목록 프로젝트');
+
+    const onlyClosed = await (await u.get('/app?view=ended')).text();
+    expect(onlyClosed).toContain('닫은 프로젝트 토론');
+    expect(onlyClosed).not.toContain('한쪽만 낸 토론');
+
+    const onlyActive = await (await u.get('/app?view=active')).text();
+    expect(onlyActive).toContain('한쪽만 낸 토론');
+    expect(onlyActive).not.toContain('닫은 프로젝트 토론');
+
+    const inProject = await (await u.get(`/app?project=${pid}`)).text();
+    expect(inProject).toContain('닫은 프로젝트 토론');
+    expect(inProject).not.toContain('아무도 안 낸 순차 토론');
+    // 기본 선택은 "전체"다
+    expect(all).toMatch(/class="on" aria-current="page">전체/);
+    // 모르는 값은 무시하고 전체를 보여 준다
+    expect(await (await u.get('/app?view=toString&project=nope')).text()).toContain('한쪽만 낸 토론');
+  });
+
   it('합의된 토론은 결론에 합의안을, 쟁점에 남은 이견을 보여 준다', async () => {
     const u = await user(true);
     const { id } = await webCreate(u, { min_rounds: '2', max_rounds: '3' });

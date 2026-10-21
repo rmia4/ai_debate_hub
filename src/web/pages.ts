@@ -5,7 +5,7 @@ import { listConnections, revokeConnection } from '../oauth/connections.js';
 import { loginUrl } from './auth-routes.js';
 import { discussionPagesRouter } from './discussion-pages.js';
 import { projectPagesRouter } from './project-pages.js';
-import { appNav, esc, logoutForm, page, suspendedPage } from './html.js';
+import { esc, logoutForm, page, suspendedPage } from './html.js';
 import { checkCsrf, loadSession, type WebSession } from './session.js';
 
 // Codex 플러그인 마켓플레이스 값. 플러그인 패키지는 이 저장소의 CODEX_PLUGIN_REF 브랜치에 둔다.
@@ -216,7 +216,7 @@ export function pagesRouter(config: Config, db: Db) {
       res.send(
         page(
           '연결 설정',
-          `${appNav(web.user.role)}
+          `
           <p><b>${esc(web.user.display_name)}</b> 계정으로 로그인했습니다.</p>
           <h2>연결된 앱</h2>
           ${
@@ -250,6 +250,7 @@ export function pagesRouter(config: Config, db: Db) {
           </dialog>
           <p>AI 하나만 연결해도 됩니다. 토론방의 A석·B석 참여 문구를 같은 AI의 두 채팅에 하나씩 입력하면 그 AI끼리 토론합니다. 같은 앱으로 다시 연결하면 기존 연결은 자동으로 해제됩니다.</p>
           ${logoutForm(web.csrf)}`,
+          { nav: web.user.role },
         ),
       );
     } catch (e) {

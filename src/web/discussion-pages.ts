@@ -13,14 +13,16 @@ import {
   type CreateInput,
   type Discussion,
   type ProjectRef,
+  type Participant,
   type Reference,
+  type Status,
   type Turn,
 } from '../db/discussions.js';
 import { getIssueLedger, type IssueChange, type IssueLedger } from '../db/issues.js';
 import { projectsFor, type Background } from '../db/projects.js';
 import { deleteUser } from '../db/users.js';
 import { crossingText, instructionFor, joinMessage, PARTICIPANT_NAME } from '../instructions.js';
-import { appNav, csrfField, esc, page } from './html.js';
+import { csrfField, esc, page } from './html.js';
 import {
   discussionMarkdown,
   issueChangeFlags,
@@ -55,6 +57,54 @@ const deleteGuide = `<p class="warn">보관 한도(${CREATE_LIMITS.stored}개·$
 
 const roundsLabel = (d: Discussion) =>
   d.mode === 'parallel' ? `라운드 ${d.current_round}/${d.max_rounds}` : `턴 ${d.current_round}/${d.max_rounds}`;
+
+// 목록 화면: 왼쪽에 새 토론·상태·프로젝트 필터·사용량, 오른쪽에 토론 표
+const LIST_STYLE = `.wrap{max-width:68rem}
+.split{display:grid;grid-template-columns:14rem 1fr;gap:2rem;align-items:start}.list-scope{margin-top:0}
+.side .btn{display:block;text-align:center}
+.side-nav{font-size:.88rem}
+.side-nav .grp{font-family:var(--mono);color:var(--mute);font-size:.75rem;margin:1.2rem 0 .3rem;letter-spacing:.04em}
+.side-nav a{display:flex;align-items:center;justify-content:space-between;gap:.5rem;min-height:44px;padding:0 .6rem;color:var(--fg);text-decoration:none;border-left:2px solid transparent}
+.side-nav a span{font-family:var(--mono);font-size:.8rem;color:var(--mute)}.side-nav a:hover{color:var(--acc)}
+.side-nav a.on{border-left-color:var(--acc);background:var(--hl);color:var(--acc)}
+.side-nav summary{display:flex;align-items:center;min-height:44px;padding:0 .6rem;list-style:none;cursor:pointer;font-weight:600}
+.side-nav summary::-webkit-details-marker{display:none}
+.side-nav summary::before{content:"▸";font-family:var(--mono);color:var(--mute);width:1.1rem;flex:none}
+.side-nav details[open]>summary::before{content:"▾"}
+.side-nav .sub a{padding-left:1.7rem}
+.side-nav .note{margin:.3rem .6rem}
+.usage{display:grid;gap:.25rem;font-family:var(--mono);font-size:.78rem;color:var(--mute)}
+.usage div{display:flex;justify-content:space-between;align-items:center;gap:.5rem}
+.meter{width:5rem;height:.4rem;border:1px solid var(--line);position:relative;flex:none}
+.meter i{position:absolute;inset:0 auto 0 0;background:var(--acc)}.meter.hi i{background:var(--b)}
+.split td:first-child{width:50%}.split .badge{white-space:nowrap}
+.badge.b,.turn-chip{color:var(--b)}.turn-chip{font-family:var(--mono);font-size:.78rem;white-space:nowrap}
+.when{font-family:var(--mono);font-size:.8rem;color:var(--mute);white-space:nowrap}
+@media (max-width:760px){.split{grid-template-columns:1fr;gap:1rem}
+.side-nav{display:flex;flex-wrap:wrap;gap:.3rem}.side-nav .grp{width:100%;margin:.4rem 0 0}.side-nav a{border:1px solid var(--line)}
+.hide-sm{display:none}}`;
+
+// 사용량 한 줄과 막대. 80% 이상이면 B색으로 표시한다
+function usageMeter(label: string, used: number, limit: number, text = `${used}/${limit}`) {
+  const pct = Math.min(100, Math.round((used / limit) * 100));
+  return `<div>${label} ${text}<span class="meter${pct >= 80 ? ' hi' : ''}"><i style="width:${pct}%"></i></span></div>`;
+}
+
+// 진행 중 토론의 차례. 동시는 현재 라운드에 아직 안 낸 자리, 순차는 마지막 제출의 반대쪽
+function turnChip(d: Discussion, state?: { submitted: Participant[]; last: Participant | null }) {
+  if (d.status !== 'active' || !state) return '';
+  const text =
+    d.mode === 'parallel'
+      ? state.submitted.length
+        ? `${PARTICIPANTS.filter((p) => !state.submitted.includes(p)).map((p) => PARTICIPANT_NAME[p]).join('·')} 대기`
+        : '양쪽 대기'
+      : state.last
+        ? `${PARTICIPANT_NAME[state.last === 'A' ? 'B' : 'A']} 차례`
+        : '선공 대기';
+  return `<br><span class="turn-chip">${text}</span>`;
+}
+
+const STATUS_BADGE: Record<Status, string> = { active: 'badge ok', agreed: 'badge', max_reached: 'badge b', closed: 'badge' };
 
 // 쟁점 변경 한 줄. 반영 제안은 그 답변으로 가는 링크, 대기·충돌은 배지로 구분한다. 이월(미언급)은 표시하지 않는다
 function issueChangeItem(c: IssueChange) {
@@ -238,39 +288,81 @@ export function discussionPagesRouter(config: Config, db: Db) {
     res.status(409).send(page('처리할 수 없음', `<p>${esc(e.message)}</p><p><a href="/app">토론 목록</a></p>`));
   };
 
-  router.get('/app', async (_req, res, next) => {
+  // ?project=<id>는 그 프로젝트의 토론, ?view=active|ended는 진행 중·종료된 토론만 보여 준다. 모르는 값은 무시한다
+  router.get('/app', async (req, res, next) => {
     try {
       const web = res.locals.web!;
       const repo = discussionsFor(db, web.user.id);
-      const [list, usage, projects] = await Promise.all([repo.list(), repo.usage(), projectsFor(db, web.user.id).list()]);
+      const [list, usage, projects, turns] = await Promise.all([
+        repo.list(),
+        repo.usage(),
+        projectsFor(db, web.user.id).list(),
+        repo.turnStates(),
+      ]);
       const full = usage.stored >= CREATE_LIMITS.stored || usage.bytes >= CREATE_LIMITS.bytes;
       const projectName = new Map(projects.map((p) => [p.id, p.name]));
-      const projectRows = projects
+      const qs = (k: string) => (typeof req.query[k] === 'string' ? (req.query[k] as string) : '');
+      const project = projectName.has(qs('project')) ? qs('project') : null;
+      const view = project ? null : qs('view') === 'active' || qs('view') === 'ended' ? qs('view') : null;
+      const link = (label: string, n: number, url: string, on: boolean) =>
+        `<a href="${url}"${on ? ' class="on" aria-current="page"' : ''}>${esc(label)} <span>${n}</span></a>`;
+
+      // 접히는 "프로젝트" 탭 아래 각 프로젝트 하위 탭. 그 밖에 "전체"(기본 선택)·"진행 중"·"종료". 한 번에 하나만 고른다
+      const active = list.filter((d) => d.status === 'active');
+      const ended = list.filter((d) => d.status !== 'active');
+      const projectLinks = projects
+        .map((p) => link(p.name, list.filter((d) => d.project_id === p.id).length, `/app?project=${esc(p.id)}`, project === p.id))
+        .join('');
+
+      const shown = project ? list.filter((d) => d.project_id === project) : view === 'active' ? active : view === 'ended' ? ended : list;
+      const rows = shown
         .map(
-          (p) => `<tr><td><a href="/app/p/${esc(p.id)}">${esc(p.name)}</a></td><td>${esc(p.description.slice(0, 80))}</td>
-            <td>${p.backgrounds}</td><td>${formatTime(p.updated_at)}</td></tr>`,
+          (d) => `<tr><td><a href="/app/d/${esc(d.id)}">${esc(d.topic)}</a><br><small>${
+            d.project_id ? `<a href="/app/p/${esc(d.project_id)}">${esc(projectName.get(d.project_id) ?? '')}</a> · ` : ''
+          }${MODE_LABEL[d.mode]}</small></td>
+            <td><span class="${STATUS_BADGE[d.status]}">${STATUS_LABEL[d.status]}</span>${turnChip(d, turns.get(d.id))}</td>
+            <td class="when hide-sm">${roundsLabel(d)}</td><td class="hide-sm"><small>${formatTime(d.updated_at)}</small></td></tr>`,
         )
         .join('');
-      const rows = list
-        .map(
-          (d) => `<tr><td><a href="/app/d/${esc(d.id)}">${esc(d.topic)}</a></td><td>${
-            d.project_id ? `<a href="/app/p/${esc(d.project_id)}">${esc(projectName.get(d.project_id) ?? '')}</a>` : ''
-          }</td><td>${MODE_LABEL[d.mode]}</td>
-            <td>${STATUS_LABEL[d.status]}</td><td>${roundsLabel(d)}</td><td>${formatTime(d.updated_at)}</td></tr>`,
-        )
-        .join('');
+      const scope = project ? projectName.get(project)! : view === 'active' ? '진행 중' : view === 'ended' ? '종료' : '';
+      const projectLine =
+        project
+          ? `<p><a href="/app/p/${esc(project)}">프로젝트 열기 →</a> · <a href="/app/new?project=${esc(project)}">이 프로젝트에서 새 토론 →</a></p>`
+          : '';
+
       res.send(
         page(
           '내 토론',
-          `${appNav(web.user.role)}
-          <p>진행 중 ${usage.active}/${CREATE_LIMITS.active} · 보관 ${usage.stored}/${CREATE_LIMITS.stored} · 용량 ${formatBytes(usage.bytes)}/${formatBytes(CREATE_LIMITS.bytes)}</p>
-          ${full ? deleteGuide : ''}
-          <h2>프로젝트</h2>
-          <p><a class="btn" href="/app/projects/new">새 프로젝트</a></p>
-          ${projects.length ? `<table><tr><th>이름</th><th>설명</th><th>배경 항목</th><th>최근 수정</th></tr>${projectRows}</table>` : '<p>아직 프로젝트가 없습니다. 프로젝트를 만들면 여러 토론이 긴 배경 자료를 함께 참조할 수 있습니다.</p>'}
-          <h2>토론</h2>
-          <p><a class="btn" href="/app/new">새 토론방 만들기</a></p>
-          ${list.length ? `<table><tr><th>주제</th><th>프로젝트</th><th>방식</th><th>상태</th><th>진행</th><th>최근 수정</th></tr>${rows}</table>` : '<p>아직 토론이 없습니다.</p>'}`,
+          `<div class="split">
+          <aside class="side">
+            <a class="btn fill" href="/app/new">새 토론방</a>
+            <div class="side-nav" role="navigation" aria-label="토론 거르기">
+              <details open><summary>프로젝트</summary><div class="sub">${projectLinks}
+              <a href="/app/projects/new">+ 새 프로젝트</a></div></details>
+              ${link('전체', list.length, '/app', !project && !view)}
+              ${link('진행 중', active.length, '/app?view=active', view === 'active')}
+              ${link('종료', ended.length, '/app?view=ended', view === 'ended')}
+              ${projects.length ? '' : '<p class="note">프로젝트를 만들면 여러 토론이 긴 배경 자료를 함께 참조할 수 있습니다.</p>'}
+              <div class="grp hide-sm">USAGE</div>
+            </div>
+            <div class="usage hide-sm">
+              ${usageMeter('진행 중', usage.active, CREATE_LIMITS.active)}
+              ${usageMeter('저장', usage.stored, CREATE_LIMITS.stored)}
+              ${usageMeter('용량', usage.bytes, CREATE_LIMITS.bytes, formatBytes(usage.bytes))}
+            </div>
+          </aside>
+          <div>
+            <p class="note list-scope">${scope ? `${esc(scope)} · ` : ''}${shown.length}개 · 최근 수정 순</p>
+            ${projectLine}
+            ${full ? deleteGuide : ''}
+            ${
+              shown.length
+                ? `<table><tr><th>주제</th><th>상태</th><th class="hide-sm">진행</th><th class="hide-sm">최근 수정</th></tr>${rows}</table>`
+                : `<p>${list.length ? '조건에 맞는 토론이 없습니다.' : '아직 토론이 없습니다.'}</p>`
+            }
+          </div>
+          </div>`,
+          { nav: web.user.role, head: LIST_STYLE },
         ),
       );
     } catch (e) {
@@ -288,7 +380,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
     const web = res.locals.web!;
     try {
       const choice = typeof req.query.project === 'string' ? await projectChoice(web.user.id, req.query.project) : null;
-      res.send(page('새 토론방', `${appNav(web.user.role)}${newForm(web.csrf, {}, '', choice)}`));
+      res.send(page('새 토론방', `${newForm(web.csrf, {}, '', choice)}`, { nav: web.user.role }));
     } catch (e) {
       handle(res, next, e);
     }
@@ -309,7 +401,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
         const choice = typeof body.project_id === 'string' && body.project_id ? await projectChoice(web.user.id, body.project_id, new Set(checkedIds(body))) : null;
         res
           .status(status)
-          .send(page('새 토론방', `${appNav(web.user.role)}${e.code === 'limit_exceeded' ? deleteGuide : ''}${newForm(web.csrf, body, e.message, choice)}`));
+          .send(page('새 토론방', `${e.code === 'limit_exceeded' ? deleteGuide : ''}${newForm(web.csrf, body, e.message, choice)}`, { nav: web.user.role }));
       } catch (e2) {
         handle(res, next, e2);
       }
@@ -346,7 +438,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
       res.send(
         page(
           d.topic,
-          `${appNav(web.user.role)}
+          `
           ${req.query.created ? '<p class="warn">토론방을 만들었습니다. 아래 참여 문구를 각 AI 채팅에 입력하세요.</p>' : ''}
           ${retentionNotice(d)}
           <p>토론 ID <code>${esc(d.id)}</code> · ${MODE_LABEL[d.mode]} 방식 · <span class="badge">${STATUS_LABEL[d.status]}</span> · ${roundsLabel(d)}${
@@ -363,6 +455,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
           <p><a href="/app/d/${esc(d.id)}.md">마크다운 내보내기</a></p>
           ${actions}
           ${ended ? '' : instructionsSection(d, project, refs)}`,
+          { nav: web.user.role },
         ),
       );
     } catch (e) {
@@ -401,7 +494,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
       res.send(
         page(
           '계정',
-          `${appNav(web.user.role)}
+          `
           <p><b>${esc(web.user.display_name)}</b>${web.user.email ? ` (${esc(web.user.email)})` : ''} · 가입 ${formatTime(web.user.created_at)}</p>
           <h2>사용량</h2>
           <table>
@@ -418,6 +511,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
           <form method="post" action="/app/account/delete">${csrfField(web.csrf)}
             <label><input type="checkbox" name="confirm" value="yes" required> 기록을 내려받았고 탈퇴합니다</label>
             <button type="submit">회원 탈퇴</button></form>`,
+          { nav: web.user.role },
         ),
       );
     } catch (e) {

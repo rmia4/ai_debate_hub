@@ -519,6 +519,19 @@ export function discussionsFor(db: Db, userId: string) {
       return rows;
     },
 
+    // 목록 화면의 차례 표시용: 진행 중 토론마다 현재 라운드에 제출한 자리와 마지막으로 제출한 자리
+    async turnStates(): Promise<Map<string, { submitted: Participant[]; last: Participant | null }>> {
+      const { rows } = await db.query<{ id: string; submitted: Participant[]; last: Participant | null }>(
+        `SELECT d.id,
+           coalesce((SELECT array_agg(t.participant ORDER BY t.id) FROM turns t
+                     WHERE t.discussion_id = d.id AND t.round = d.current_round), '{}') AS submitted,
+           (SELECT t.participant FROM turns t WHERE t.discussion_id = d.id ORDER BY t.id DESC LIMIT 1) AS last
+         FROM discussions d WHERE d.owner_id = $1 AND d.status = 'active'`,
+        [userId],
+      );
+      return new Map(rows.map((r) => [r.id, { submitted: r.submitted, last: r.last }]));
+    },
+
     usage: () => usageOf(db, userId),
 
     // 계정 내보내기용: 모든 토론과 답변, 쟁점 이벤트, 참조 배경
