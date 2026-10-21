@@ -52,12 +52,11 @@ CREATE INDEX IF NOT EXISTS oidc_models_grant_id ON oidc_models (grant_id);
 CREATE INDEX IF NOT EXISTS oidc_models_uid ON oidc_models (uid);
 CREATE INDEX IF NOT EXISTS oidc_models_expires_at ON oidc_models (expires_at);
 
--- 동의 1회 = 연결 1개. oidc-provider의 grant와 1:1
+-- 동의 1회 = 연결 1개. oidc-provider의 grant와 1:1. 토론 자리(A/B)는 연결이 아니라 도구 입력으로 정한다
 CREATE TABLE IF NOT EXISTS oauth_connections (
   id            bigserial PRIMARY KEY,
   grant_id      text NOT NULL UNIQUE,
   user_id       text NOT NULL REFERENCES users (id) ON DELETE CASCADE,
-  participant   text NOT NULL CHECK (participant IN ('claude', 'codex')),
   client_id     text NOT NULL,
   client_name   text NOT NULL,
   created_at    timestamptz NOT NULL DEFAULT now(),
@@ -66,8 +65,9 @@ CREATE TABLE IF NOT EXISTS oauth_connections (
   revoked_at    timestamptz,
   revoke_reason text
 );
-CREATE UNIQUE INDEX IF NOT EXISTS oauth_connections_active
-  ON oauth_connections (user_id, participant) WHERE revoked_at IS NULL;
+-- 이전 구조(연결마다 Claude/Codex 역할)에서 옮긴다. 역할 컬럼을 지우면 그 유니크 인덱스도 함께 지워진다
+ALTER TABLE oauth_connections DROP COLUMN IF EXISTS participant;
+CREATE INDEX IF NOT EXISTS oauth_connections_user_id ON oauth_connections (user_id, client_id) WHERE revoked_at IS NULL;
 
 -- 토론방. 모든 조회·수정은 owner_id 조건과 함께 src/db/discussions.ts를 거친다
 CREATE TABLE IF NOT EXISTS discussions (
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS discussions (
   topic              text NOT NULL,
   context            text NOT NULL DEFAULT '',
   mode               text NOT NULL CHECK (mode IN ('parallel', 'sequential')),
-  starter            text CHECK (starter IN ('claude', 'codex')),
+  starter            text CHECK (starter IN ('A', 'B')),
   status             text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'agreed', 'max_reached', 'closed')),
   current_round      int NOT NULL DEFAULT 1,
   max_rounds         int NOT NULL,
@@ -88,12 +88,19 @@ CREATE TABLE IF NOT EXISTS discussions (
 );
 CREATE INDEX IF NOT EXISTS discussions_owner_id ON discussions (owner_id, status);
 
+-- 이전 구조의 참여자 값(claude/codex)을 자리(A/B)로 옮긴다. 여러 번 실행해도 결과가 같다
+ALTER TABLE discussions DROP CONSTRAINT IF EXISTS discussions_starter_check;
+UPDATE discussions SET starter = CASE starter WHEN 'claude' THEN 'A' WHEN 'codex' THEN 'B' ELSE starter END
+  WHERE starter IN ('claude', 'codex');
+ALTER TABLE discussions ADD CONSTRAINT discussions_starter_check CHECK (starter IN ('A', 'B'));
+
 -- 답변. 동시 방식은 라운드, 순차 방식은 턴 번호를 round에 둔다
 CREATE TABLE IF NOT EXISTS turns (
   id                   bigserial PRIMARY KEY,
   discussion_id        text NOT NULL REFERENCES discussions (id) ON DELETE CASCADE,
   round                int NOT NULL,
-  participant          text NOT NULL CHECK (participant IN ('claude', 'codex')),
+  participant          text NOT NULL CHECK (participant IN ('A', 'B')),
+  client_name          text,
   content              text NOT NULL,
   proposal             text,
   agreement            text CHECK (agreement IN ('agree', 'partial', 'disagree')),
@@ -103,6 +110,13 @@ CREATE TABLE IF NOT EXISTS turns (
   created_at           timestamptz NOT NULL DEFAULT now(),
   UNIQUE (discussion_id, round, participant)
 );
+-- client_name: 제출한 연결의 앱 이름(기록 표시용). 이전 구조에서 옮길 때 컬럼을 더하고 참여자 값을 자리로 바꾼다
+ALTER TABLE turns ADD COLUMN IF NOT EXISTS client_name text;
+ALTER TABLE turns DROP CONSTRAINT IF EXISTS turns_participant_check;
+UPDATE turns SET client_name = COALESCE(client_name, CASE participant WHEN 'claude' THEN 'Claude' ELSE 'Codex' END),
+  participant = CASE participant WHEN 'claude' THEN 'A' ELSE 'B' END
+  WHERE participant IN ('claude', 'codex');
+ALTER TABLE turns ADD CONSTRAINT turns_participant_check CHECK (participant IN ('A', 'B'));
 
 -- 하루 1회 정리 작업의 실행 결과. 운영자 화면에 표시한다
 CREATE TABLE IF NOT EXISTS cleanup_runs (

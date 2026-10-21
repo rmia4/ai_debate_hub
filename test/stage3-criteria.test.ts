@@ -20,16 +20,18 @@ afterAll(async () => {
 type Tool = (name: string, args: Record<string, unknown>) => Promise<ToolResult>;
 let userCount = 0;
 
-// 한 사용자의 Claude·Codex 연결을 만든다. 테스트마다 새 사용자를 써서 생성 한도가 서로 영향을 주지 않게 한다.
+// 자리(A/B)를 정해 도구를 부른다. get_state·submit에는 seat을 넣는다.
+const toolAs =
+  (token: string, seat: 'A' | 'B'): Tool =>
+  (name, args) =>
+    callTool(s, token, name, name === 'get_state' || name === 'submit' ? { seat, ...args } : args);
+
+// 한 사용자의 Claude 연결을 A석, Codex 연결을 B석으로 쓴다. 테스트마다 새 사용자를 써서 생성 한도가 서로 영향을 주지 않게 한다.
 async function pair() {
   const { browser, userId } = await loginAs(s, `user${++userCount}`);
-  const claude = await connect(s, { clientId: claudeClient, redirectUri: CLAUDE_CB, participant: 'claude', browser });
-  const codex = await connect(s, { clientId: codexClient, redirectUri: CODEX_CB, participant: 'codex', browser });
-  const tool =
-    (token: string): Tool =>
-    (name, args) =>
-      callTool(s, token, name, args);
-  return { userId, claudeToken: claude.access_token, claude: tool(claude.access_token), codex: tool(codex.access_token) };
+  const claude = await connect(s, { clientId: claudeClient, redirectUri: CLAUDE_CB, browser });
+  const codex = await connect(s, { clientId: codexClient, redirectUri: CODEX_CB, browser });
+  return { userId, claudeToken: claude.access_token, claude: toolAs(claude.access_token, 'A'), codex: toolAs(codex.access_token, 'B') };
 }
 
 async function start(as: Tool, args: Record<string, unknown> = {}) {
@@ -66,6 +68,31 @@ describe('격리', () => {
       expect(r.data).toEqual(missing.data);
     }
     expect(await turnCount(id)).toBe(0);
+  });
+});
+
+describe('자리(A/B)', () => {
+  it('같은 연결(같은 AI의 두 채팅)이 A석·B석으로 나눠 토론해 합의할 수 있다', async () => {
+    const { browser } = await loginAs(s, `user${++userCount}`);
+    const token = (await connect(s, { clientId: claudeClient, redirectUri: CLAUDE_CB, browser })).access_token;
+    const a = toolAs(token, 'A');
+    const b = toolAs(token, 'B');
+    const id = await start(a, { mode: 'sequential' });
+    const first = await ok(a, id, { expected_round: 1, proposal: '안 A' });
+    expect(first.submission).toMatchObject({ participant: 'A', client_name: 'Claude' });
+    expect((await a('submit', { discussion_id: id, expected_round: 2, content: '연달아 제출' })).data.error).toBe('not_your_turn');
+    await ok(b, id, { expected_round: 2, sign: true });
+    const end = await ok(a, id, { expected_round: 3, sign: true });
+    expect(end).toMatchObject({ status: 'agreed', agreed_proposal: { proposal: '안 A', participant: 'A' } });
+  });
+
+  it('seat이 없거나 A·B가 아니면 도구 입력 오류로 거부된다', async () => {
+    const u = await pair();
+    const id = await start(u.claude);
+    for (const seat of [undefined, 'claude', 'C']) {
+      const r = await callTool(s, u.claudeToken, 'get_state', { discussion_id: id, ...(seat ? { seat } : {}) });
+      expect(r.isError).toBe(true);
+    }
   });
 });
 
@@ -158,7 +185,7 @@ describe('동시 방식', () => {
     await Promise.all([ok(u.claude, id, agree(2)), ok(u.codex, id, agree(2))]);
     let state = (await u.claude('get_state', { discussion_id: id })).data;
     expect(state).toMatchObject({ status: 'active', current_round: 3, my_turn: true, submitted: false });
-    expect(state.previous_round.map((t: { participant: string }) => t.participant).sort()).toEqual(['claude', 'codex']);
+    expect(state.previous_round.map((t: { participant: string }) => t.participant).sort()).toEqual(['A', 'B']);
 
     await Promise.all([ok(u.claude, id, agree(3)), ok(u.codex, id, agree(3))]);
     state = (await u.codex('get_state', { discussion_id: id })).data;
@@ -205,10 +232,10 @@ describe('순차 방식', () => {
     expect(before.guide).toContain('선공');
 
     const r = await ok(u.codex, id, { expected_round: 1, proposal: '안 B' });
-    expect(r).toMatchObject({ current_turn: 2, next: { participant: 'claude', turn: 2 } });
+    expect(r).toMatchObject({ current_turn: 2, next: { participant: 'A', turn: 2 } });
     const state = (await u.claude('get_state', { discussion_id: id })).data;
-    expect(state).toMatchObject({ starter: 'codex', my_turn: true, opponent_last_turn: { content: '근거를 담은 답변' } });
-    expect(state.current_proposal).toMatchObject({ proposal: '안 B', participant: 'codex' });
+    expect(state).toMatchObject({ starter: 'B', my_turn: true, opponent_last_turn: { content: '근거를 담은 답변' } });
+    expect(state.current_proposal).toMatchObject({ proposal: '안 B', participant: 'B' });
   });
 
   it('양쪽이 동시에 첫 제출하면 한쪽만 선공이 되고 다른 쪽은 "상대가 먼저 시작함"으로 거부된다', async () => {
@@ -244,7 +271,7 @@ describe('순차 방식', () => {
     const signed = await ok(u.codex, id, { expected_round: 2, sign: true });
     expect(signed).toMatchObject({ status: 'active', current_turn: 3 });
     const state = (await u.claude('get_state', { discussion_id: id })).data;
-    expect(state.signs).toEqual([{ turn: 2, participant: 'codex' }]);
+    expect(state.signs).toEqual([{ turn: 2, participant: 'B' }]);
 
     const end = await ok(u.claude, id, { expected_round: 3, sign: true });
     expect(end).toMatchObject({ status: 'agreed', current_turn: 3, agreed_proposal: { proposal_id: p.submission.id, proposal: '안 A' } });
@@ -301,8 +328,8 @@ describe('입력 제한과 생성 한도', () => {
     const u = await pair();
     const id = await start(u.claude);
     const r = await u.claude('start_discussion', { topic: '지시문 확인' });
-    expect(r.data.instructions.claude).toContain('쉽게 동의하지 않는다');
-    expect(r.data.instructions.codex).toContain(r.data.discussion_id);
+    expect(r.data.instructions.A).toContain('쉽게 동의하지 않는다');
+    expect(r.data.instructions.B).toContain(r.data.discussion_id);
     const state = (await u.claude('get_state', { discussion_id: id })).data;
     expect(state.guide).toContain('독립 답변');
 

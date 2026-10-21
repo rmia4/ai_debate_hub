@@ -5,6 +5,7 @@ import {
   CREATE_LIMITS,
   DiscussionError,
   INPUT_LIMITS,
+  PARTICIPANTS,
   RETENTION_DAYS,
   currentProposal,
   discussionsFor,
@@ -14,7 +15,6 @@ import {
 } from '../db/discussions.js';
 import { deleteUser } from '../db/users.js';
 import { instructionFor, PARTICIPANT_NAME } from '../instructions.js';
-import { PARTICIPANTS } from '../oauth/connections.js';
 import { appNav, csrfField, esc, page } from './html.js';
 import { discussionMarkdown, MODE_LABEL, renderMarkdown, STATUS_LABEL } from './markdown.js';
 import { checkCsrf, endSession } from './session.js';
@@ -47,7 +47,8 @@ function turnBox(t: Turn, d: Discussion) {
     t.sign ? '<span class="badge ok">사인</span>' : '',
     d.agreed_proposal_id === t.id ? '<span class="badge ok">합의된 안</span>' : '',
   ].join(' ');
-  return `<div class="turn"><p><b>${PARTICIPANT_NAME[t.participant]}</b> <small>#${esc(t.id)} · ${formatTime(t.created_at)}</small> ${badges}</p>
+  const app = t.client_name ? ` <small>${esc(t.client_name)}</small>` : '';
+  return `<div class="turn"><p><b>${PARTICIPANT_NAME[t.participant]}</b>${app} <small>#${esc(t.id)} · ${formatTime(t.created_at)}</small> ${badges}</p>
     ${renderMarkdown(t.content)}
     ${t.proposal ? `<p><b>제안 #${esc(t.id)}</b></p>${renderMarkdown(t.proposal)}` : ''}
     ${t.open_issues.length ? `<p>남은 이견</p><ul>${t.open_issues.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div>`;
@@ -77,7 +78,7 @@ function sequentialRecord(d: Discussion, turns: Turn[]) {
   const timeline = turns.map((t) => `<h3>턴 ${t.round}</h3>${turnBox(t, d)}`).join('');
   if (d.status !== 'active') return timeline;
   const last = turns.at(-1);
-  const next = last ? PARTICIPANT_NAME[last.participant === 'claude' ? 'codex' : 'claude'] : '먼저 제출하는 쪽(선공)';
+  const next = last ? PARTICIPANT_NAME[last.participant === 'A' ? 'B' : 'A'] : '먼저 제출하는 쪽(선공)';
   return `${timeline}<p><span class="badge">다음 차례</span> 턴 ${d.current_round}: ${next}</p>`;
 }
 
@@ -103,9 +104,9 @@ function conclusionOf(d: Discussion, turns: Turn[]) {
 
 function instructionsSection(d: Discussion) {
   return `<h2>참여자별 지시문</h2>
-    <p>각 AI 채팅에 붙여 넣으세요. 지시문에는 인증 정보가 들어 있지 않습니다. 참여자는 연결할 때 고른 역할로 정해집니다.</p>
+    <p>토론할 두 AI 채팅에 하나씩 붙여 넣으세요. Claude와 Codex처럼 다른 AI여도 되고, 같은 AI의 다른 채팅이어도 됩니다. 지시문에는 인증 정보가 들어 있지 않습니다.</p>
     ${PARTICIPANTS.map(
-      (p) => `<h3>${PARTICIPANT_NAME[p]}용 <button type="button" data-copy="instr-${p}">복사</button></h3>
+      (p) => `<h3>${PARTICIPANT_NAME[p]} <button type="button" data-copy="instr-${p}">복사</button></h3>
       <pre id="instr-${p}">${esc(instructionFor(d, p))}</pre>`,
     ).join('')}`;
 }
@@ -114,7 +115,7 @@ function newForm(csrf: string, values: Record<string, string> = {}, error = '') 
   const v = (k: string) => esc(values[k] ?? '');
   const mode = values.mode === 'sequential' ? 'sequential' : 'parallel';
   return `${error ? `<p class="warn">${esc(error)}</p>` : ''}
-    <p class="warn"><b>기밀이나 개인정보를 넣지 마세요.</b> 주제·배경과 AI 답변은 서버에 저장되며, 두 AI 서비스에도 전달됩니다.</p>
+    <p class="warn"><b>기밀이나 개인정보를 넣지 마세요.</b> 주제·배경과 AI 답변은 서버에 저장되며, 참여하는 AI 서비스에도 전달됩니다.</p>
     <form method="post" action="/app/new">${csrfField(csrf)}
       <label>주제 (${INPUT_LIMITS.topic}자 이내)<br><input name="topic" required maxlength="${INPUT_LIMITS.topic}" size="60" value="${v('topic')}"></label>
       <label>배경 설명·제약 조건 (선택, ${INPUT_LIMITS.context}자 이내)<br><textarea name="context" maxlength="${INPUT_LIMITS.context}" rows="6" cols="60">${v('context')}</textarea></label>

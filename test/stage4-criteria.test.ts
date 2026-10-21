@@ -22,13 +22,20 @@ afterAll(async () => {
 
 let userCount = 0;
 
+// 테스트에서는 Claude 연결 토큰을 A석, Codex 연결 토큰을 B석으로 쓴다
+const seatOf = new Map<string, string>();
+const tool = (token: string, name: string, args: Record<string, unknown>) =>
+  callTool(s, token, name, name === 'get_state' || name === 'submit' ? { seat: seatOf.get(token), ...args } : args);
+
 // 웹 로그인 + Claude 연결. withCodex면 Codex도 연결한다.
 async function user(withCodex = false) {
   const { browser, userId } = await loginAs(s, `web${++userCount}`);
-  const claude = (await connect(s, { clientId: claudeClient, redirectUri: CLAUDE_CB, participant: 'claude', browser })).access_token;
+  const claude = (await connect(s, { clientId: claudeClient, redirectUri: CLAUDE_CB, browser })).access_token;
   const codex = withCodex
-    ? (await connect(s, { clientId: codexClient, redirectUri: CODEX_CB, participant: 'codex', browser })).access_token
+    ? (await connect(s, { clientId: codexClient, redirectUri: CODEX_CB, browser })).access_token
     : '';
+  seatOf.set(claude, 'A');
+  if (codex) seatOf.set(codex, 'B');
   const csrf = csrfFrom(await (await browser.request(`${s.baseUrl}/app/new`)).text());
   const get = (path: string) => browser.request(`${s.baseUrl}${path}`);
   const post = (path: string, fields: Record<string, string> = {}) =>
@@ -43,7 +50,7 @@ async function webCreate(u: User, fields: Record<string, string> = {}) {
   return { res, id };
 }
 
-const mcpCreate = (u: User, topic = 'MCP에서 만든 토론') => callTool(s, u.claude, 'start_discussion', { topic });
+const mcpCreate = (u: User, topic = 'MCP에서 만든 토론') => tool(u.claude, 'start_discussion', { topic });
 
 // 종료된 토론을 DB에 직접 채운다(하루 생성 한도와 무관하게 보관 한도를 시험하기 위해)
 async function fillEnded(userId: string, count: number, contextBytes = 0) {
@@ -97,11 +104,12 @@ describe('토론 화면', () => {
     const { res, id } = await webCreate(u, { topic: '캐시 전략', context: '읽기 위주', mode: 'sequential', max_rounds: '6' });
     expect(res.status).toBe(303);
     const detail = await (await u.get(res.headers.get('location')!)).text();
-    expect(detail).toContain(`너는 ai-debate 토론 ${id}에 &quot;Claude&quot;로 참여한다. 진행 방식은 순차 방식이다.`);
-    expect(detail).toContain(`너는 ai-debate 토론 ${id}에 &quot;Codex&quot;로 참여한다.`);
+    expect(detail).toContain(`너는 ai-debate 토론 ${id}에 A석으로 참여한다. 진행 방식은 순차 방식이다.`);
+    expect(detail).toContain(`너는 ai-debate 토론 ${id}에 B석으로 참여한다.`);
+    expect(detail).toContain('seat에는 항상 &quot;A&quot;를 넣는다');
     expect(detail).toContain('배경: 읽기 위주');
-    expect(detail).toContain('data-copy="instr-claude"');
-    expect(detail).toContain('data-copy="instr-codex"');
+    expect(detail).toContain('data-copy="instr-A"');
+    expect(detail).toContain('data-copy="instr-B"');
     expect((await u.get('/static/app.js')).status).toBe(200);
 
     const { rows } = await s.db.query(`SELECT mode, max_rounds, min_rounds FROM discussions WHERE id = $1`, [id]);
@@ -120,12 +128,12 @@ describe('토론 화면', () => {
   it('상세 화면은 진행 중 라운드의 제출도 보여 주지만, MCP 조회는 완료된 라운드만 보여 준다', async () => {
     const u = await user(true);
     const { id } = await webCreate(u);
-    await callTool(s, u.claude, 'submit', { discussion_id: id, expected_round: 1, content: '진행 중 라운드의 클로드 답변', proposal: '안 A' });
+    await tool(u.claude, 'submit', { discussion_id: id, expected_round: 1, content: '진행 중 라운드의 클로드 답변', proposal: '안 A' });
 
     const detail = await (await u.get(`/app/d/${id}`)).text();
     expect(detail).toContain('진행 중 라운드의 클로드 답변');
     expect(detail).toContain('아직 제출 안 함');
-    const state = await callTool(s, u.codex, 'get_state', { discussion_id: id });
+    const state = await tool(u.codex, 'get_state', { discussion_id: id });
     expect(JSON.stringify(state.data)).not.toContain('진행 중 라운드의 클로드 답변');
   });
 
@@ -133,7 +141,7 @@ describe('토론 화면', () => {
     const u = await user(true);
     const { id } = await webCreate(u, { min_rounds: '2', max_rounds: '3' });
     const submit = (token: string, args: Record<string, unknown>) =>
-      callTool(s, token, 'submit', { discussion_id: id, content: '근거', ...args });
+      tool(token, 'submit', { discussion_id: id, content: '근거', ...args });
     const a = await submit(u.claude, { expected_round: 1, proposal: '**최종안** 내용', open_issues: ['비용 미확정'] });
     await submit(u.codex, { expected_round: 1, open_issues: ['운영 부담'] });
     const proposalId = a.data.submission.id;
@@ -164,7 +172,7 @@ describe('토론 화면', () => {
     const { rows } = await s.db.query<{ status: string; ended_at: Date | null }>(`SELECT status, ended_at FROM discussions WHERE id = $1`, [id]);
     expect(rows[0].status).toBe('closed');
     expect(rows[0].ended_at).not.toBeNull();
-    const r = await callTool(s, u.claude, 'submit', { discussion_id: id, expected_round: 1, content: '늦은 답변' });
+    const r = await tool(u.claude, 'submit', { discussion_id: id, expected_round: 1, content: '늦은 답변' });
     expect(r.data.error).toBe('ended');
     expect((await u.post(`/app/d/${id}/close`)).status).toBe(409);
   });
@@ -190,7 +198,7 @@ describe('삭제', () => {
     const u = await user(true);
     await fillEnded(u.userId, 49);
     const { id } = await webCreate(u, { topic: '50번째' });
-    await callTool(s, u.claude, 'submit', { discussion_id: id, expected_round: 1, content: '답변', open_issues: ['이견'] });
+    await tool(u.claude, 'submit', { discussion_id: id, expected_round: 1, content: '답변', open_issues: ['이견'] });
     await u.post(`/app/d/${id}/close`);
     expect(await storedCount(u.userId)).toBe(50);
 
@@ -262,7 +270,7 @@ describe('한도 검증', () => {
   it('용량은 글자 수가 아니라 UTF-8 바이트로 계산한다', async () => {
     const u = await user(true);
     const { id } = await webCreate(u, { topic: '한글', context: 'ab' });
-    await callTool(s, u.claude, 'submit', {
+    await tool(u.claude, 'submit', {
       discussion_id: id,
       expected_round: 1,
       content: '가나다',
@@ -288,7 +296,7 @@ describe('한도 검증', () => {
     expect((await mcpCreate(u)).data.error).toBe('limit_exceeded');
 
     const submit = (token: string) =>
-      callTool(s, token, 'submit', { discussion_id: id, expected_round: 1, content: '용량을 넘겨도 제출'.repeat(100) });
+      tool(token, 'submit', { discussion_id: id, expected_round: 1, content: '용량을 넘겨도 제출'.repeat(100) });
     expect((await submit(u.claude)).isError).toBe(false);
     expect((await submit(u.codex)).isError).toBe(false);
     expect((await discussionsFor(s.db, u.userId).usage()).bytes).toBeGreaterThan(5_000_000);
@@ -312,7 +320,7 @@ describe('웹 보안', () => {
 
     const u = await user();
     const { id } = await webCreate(u);
-    await callTool(s, u.claude, 'submit', { discussion_id: id, expected_round: 1, content: evil, proposal: evil });
+    await tool(u.claude, 'submit', { discussion_id: id, expected_round: 1, content: evil, proposal: evil });
     const detail = await (await u.get(`/app/d/${id}`)).text();
     expect(detail).not.toMatch(/<script>alert|javascript:alert|onerror=|<iframe/i);
     expect(detail).toContain('<strong>굵게</strong>');
@@ -427,7 +435,7 @@ describe('정리 작업', () => {
     await insertDiscussion('cleanup-expired', 'closed', 181);
     await insertDiscussion('cleanup-recent', 'agreed', 179);
     await insertDiscussion('cleanup-active', 'active', null);
-    await s.db.query(`INSERT INTO turns (discussion_id, round, participant, content) VALUES ('cleanup-expired', 1, 'claude', 'x')`);
+    await s.db.query(`INSERT INTO turns (discussion_id, round, participant, content) VALUES ('cleanup-expired', 1, 'A', 'x')`);
 
     await s.db.query(`INSERT INTO sessions (id, user_id, expires_at) VALUES ('expired-session', $1, ${ago(1)})`, [u.userId]);
     const model = (model: string, id: string, expiresDaysAgo: number) =>
@@ -438,8 +446,8 @@ describe('정리 작업', () => {
     await model('AccessToken', 'recent-access', 1);
     await s.db.query(`INSERT INTO rate_limits (key, window_start, count) VALUES ('old-key', ${ago(3)}, 1), ('new-key', now(), 1)`);
     await s.db.query(
-      `INSERT INTO oauth_connections (grant_id, user_id, participant, client_id, client_name, created_at, expires_at, revoked_at)
-       VALUES ('old-grant', $1, 'codex', 'c', 'Old', ${ago(90)}, ${ago(60)}, ${ago(70)})`,
+      `INSERT INTO oauth_connections (grant_id, user_id, client_id, client_name, created_at, expires_at, revoked_at)
+       VALUES ('old-grant', $1, 'c', 'Old', ${ago(90)}, ${ago(60)}, ${ago(70)})`,
       [u.userId],
     );
 
@@ -485,5 +493,35 @@ describe('정리 작업', () => {
     const { readFile } = await import('node:fs/promises');
     const vercel = JSON.parse(await readFile(new URL('../vercel.json', import.meta.url), 'utf8'));
     expect(vercel.crons).toEqual([{ path: '/cron/cleanup', schedule: expect.stringMatching(/^\d+ \d+ \* \* \*$/) }]);
+  });
+});
+
+describe('이전 구조(연결마다 Claude/Codex 역할)에서 옮기기', () => {
+  it('마이그레이션을 다시 실행하면 참여자 값이 자리로 바뀌고 앱 이름이 채워지며, 여러 번 실행해도 같다', async () => {
+    const { migrate } = await import('../src/db/migrate.js');
+    const u = await user();
+    const id = 'legacy-discussion';
+    await s.db.query(`ALTER TABLE discussions DROP CONSTRAINT discussions_starter_check`);
+    await s.db.query(`ALTER TABLE turns DROP CONSTRAINT turns_participant_check`);
+    await s.db.query(`ALTER TABLE oauth_connections ADD COLUMN participant text`);
+    await s.db.query(
+      `INSERT INTO discussions (id, owner_id, topic, mode, max_rounds, starter) VALUES ($1, $2, 't', 'sequential', 10, 'codex')`,
+      [id, u.userId],
+    );
+    await s.db.query(`INSERT INTO turns (discussion_id, round, participant, content) VALUES ($1, 1, 'codex', 'x'), ($1, 2, 'claude', 'y')`, [id]);
+
+    await migrate(s.db);
+    await migrate(s.db);
+
+    const d = await s.db.query(`SELECT starter FROM discussions WHERE id = $1`, [id]);
+    expect(d.rows[0]).toEqual({ starter: 'B' });
+    const t = await s.db.query(`SELECT round, participant, client_name FROM turns WHERE discussion_id = $1 ORDER BY round`, [id]);
+    expect(t.rows).toEqual([
+      { round: 1, participant: 'B', client_name: 'Codex' },
+      { round: 2, participant: 'A', client_name: 'Claude' },
+    ]);
+    const col = await s.db.query(`SELECT 1 FROM information_schema.columns WHERE table_name = 'oauth_connections' AND column_name = 'participant'`);
+    expect(col.rows).toHaveLength(0);
+    await s.db.query(`DELETE FROM discussions WHERE id = $1`, [id]);
   });
 });

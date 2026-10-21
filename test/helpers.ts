@@ -209,12 +209,12 @@ export async function startAuthorize(s: TestServer, opts: { clientId: string; re
 
 export type AuthorizeFlow = Awaited<ReturnType<typeof startAuthorize>>;
 
-// 동의 화면에서 역할을 골라 제출하고, 클라이언트 콜백으로 돌아온 인가 코드를 받는다
-export async function submitConsent(flow: AuthorizeFlow, redirectUri: string, participant: 'claude' | 'codex') {
+// 동의 화면에서 허용을 제출하고, 클라이언트 콜백으로 돌아온 인가 코드를 받는다
+export async function submitConsent(flow: AuthorizeFlow, redirectUri: string) {
   const callback = await flow.browser.follow(
     `${flow.consentUrl}/consent`,
     redirectUri,
-    flow.browser.form({ participant, csrf: flow.csrf }),
+    flow.browser.form({ csrf: flow.csrf }),
   );
   const cb = new URL(callback);
   return { code: cb.searchParams.get('code')!, iss: cb.searchParams.get('iss'), verifier: flow.verifier };
@@ -223,11 +223,11 @@ export async function submitConsent(flow: AuthorizeFlow, redirectUri: string, pa
 // 로그인·동의를 거쳐 인가 코드를 받는다. browser가 없으면 username으로 로그인한 새 브라우저를 쓴다.
 export async function authorize(
   s: TestServer,
-  opts: { clientId: string; redirectUri: string; participant: 'claude' | 'codex'; username?: string; browser?: Browser },
+  opts: { clientId: string; redirectUri: string; username?: string; browser?: Browser },
 ) {
   const browser = opts.browser ?? (await loginAs(s, opts.username!)).browser;
   const flow = await startAuthorize(s, { clientId: opts.clientId, redirectUri: opts.redirectUri, browser });
-  const result = await submitConsent(flow, opts.redirectUri, opts.participant);
+  const result = await submitConsent(flow, opts.redirectUri);
   return { ...result, consentPage: flow.consentPage, browser };
 }
 
@@ -290,20 +290,20 @@ export async function callTool<T = Record<string, any>>(
   return { status: res.status, isError: !!body.result!.isError, data };
 }
 
-// 토큰이 어느 (사용자, 참여자)로 판별되는지 확인한다. 토론을 하나 만들어 소유자와 get_state의 me를 읽고 지운다.
+// 토큰이 어느 사용자·앱으로 판별되는지 확인한다. 토론을 하나 만들어 A석으로 제출하고, 소유자와 기록된 앱 이름을 읽고 지운다.
 export async function callGetState(s: TestServer, accessToken: string) {
   const created = await callTool(s, accessToken, 'start_discussion', { topic: 'whoami' });
   if (created.status !== 200) return { status: created.status, state: undefined };
   const id = created.data.discussion_id as string;
-  const state = await callTool(s, accessToken, 'get_state', { discussion_id: id });
+  const submitted = await callTool(s, accessToken, 'submit', { discussion_id: id, seat: 'A', expected_round: 1, content: 'whoami' });
   const { rows } = await s.db.query<{ owner_id: string }>(`DELETE FROM discussions WHERE id = $1 RETURNING owner_id`, [id]);
-  return { status: state.status, state: { user: rows[0].owner_id, me: state.data.me as string } };
+  return { status: submitted.status, state: { user: rows[0].owner_id, app: submitted.data.submission.client_name as string } };
 }
 
 // 처음부터 끝까지 연결해 토큰을 받는다
 export async function connect(
   s: TestServer,
-  opts: { clientId: string; redirectUri: string; participant: 'claude' | 'codex'; username?: string; browser?: Browser },
+  opts: { clientId: string; redirectUri: string; username?: string; browser?: Browser },
 ) {
   const a = await authorize(s, opts);
   const t = await exchangeCode(s, opts.clientId, opts.redirectUri, a.code, a.verifier);
@@ -311,10 +311,10 @@ export async function connect(
   return { access_token: t.json.access_token, refresh_token: t.json.refresh_token, browser: a.browser, consentPage: a.consentPage };
 }
 
-export async function activeConnectionCount(s: TestServer, userId: string, participant: string) {
+export async function activeConnectionCount(s: TestServer, userId: string, clientId: string) {
   const { rows } = await s.db.query<{ n: number }>(
-    `SELECT count(*)::int AS n FROM oauth_connections WHERE user_id = $1 AND participant = $2 AND revoked_at IS NULL`,
-    [userId, participant],
+    `SELECT count(*)::int AS n FROM oauth_connections WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL`,
+    [userId, clientId],
   );
   return rows[0].n;
 }

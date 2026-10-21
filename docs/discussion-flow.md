@@ -34,13 +34,16 @@
 
 ## MCP 도구 명세
 
-도구는 4개로 제한합니다. 서버는 OAuth 액세스 토큰으로 **사용자와 참여자(Claude/Codex)를 함께** 판별하므로 `me` 입력은 두지 않습니다. 판별은 "요청 → (사용자, 참여자)" 함수 한 곳에서만 합니다. 모든 도구는 토큰 소유자의 토론방만 조회·수정합니다.
+도구는 4개로 제한합니다. 서버는 OAuth 액세스 토큰으로 **사용자**를 판별하고(판별은 "요청 → 사용자" 함수 한 곳에서만 합니다), 토론의 자리는 `get_state`·`submit`의 `seat`(`A`/`B`) 입력으로 받습니다. 같은 AI의 두 채팅은 같은 연결(토큰)을 쓰므로 토큰으로는 자리를 구별할 수 없기 때문입니다. 자리는 지시문에 적혀 있고, AI는 토론 내내 같은 값을 넣습니다. 모든 도구는 토큰 소유자의 토론방만 조회·수정합니다.
+
+- 자리를 잘못 넣는 것은 본인 토론방에서 본인 AI가 하는 실수이므로 보안 경계가 아닙니다. 차례 검증(`not_your_turn`)과 "이미 제출됨" 응답이 대부분의 혼동을 막습니다.
+- 각 답변에는 제출한 연결의 앱 이름(`client_name`)을 함께 남겨 웹 기록에 "A석 · Claude"처럼 보여 줍니다.
 
 | 도구 | 입력 | 반환 | 비고 |
 | --- | --- | --- | --- |
-| `start_discussion` | `topic`, `context`(선택), `mode`(`parallel`/`sequential`, 기본 `parallel`), `max_rounds`(동시 기본 5, 순차 기본 10), `min_rounds`(동시 기본 2) | `discussion_id`, 참여자별 지시문 | 웹 생성이 기본이고, 채팅에서 만들 때만 사용. 접속 주소·비밀값은 반환하지 않음. 동시: 2 ≤ `min_rounds` ≤ `max_rounds` ≤ 10, 순차: 4 ≤ `max_rounds` ≤ 20 |
-| `get_state` | `discussion_id` | 주제·배경, 진행 방식, 현재 라운드(순차는 턴), 내 차례·제출 여부, 직전 답변(동시: 양쪽, 순차: 상대 직전 턴), 각 답변의 동의 대상 ID, 합의 후보 목록(완료된 라운드의 `proposal` ID·라운드·제안자·본문), 순차 방식의 현재 합의안과 사인 현황, 토론 상태 | 동시 방식 라운드 1은 상대 답변 없음. 진행 중인 라운드의 새 합의안은 상대에게 숨김. 순차 방식에서 아무도 시작하지 않았으면 "먼저 제출하면 선공"을 안내 |
-| `submit` | `discussion_id`, `expected_round`, `content`, `proposal`(선택), `open_issues`, 동시 방식: `agreement`·`accepted_proposal_id`, 순차 방식: `sign` | 접수 결과, 다음 차례, 합의 판정 결과 | 같은 번호의 기존 제출이 있으면 그 결과 반환(재시도). 순차 방식은 `agreement`를 받지 않음 |
+| `start_discussion` | `topic`, `context`(선택), `mode`(`parallel`/`sequential`, 기본 `parallel`), `max_rounds`(동시 기본 5, 순차 기본 10), `min_rounds`(동시 기본 2) | `discussion_id`, 자리별(`A`/`B`) 지시문 | 웹 생성이 기본이고, 채팅에서 만들 때만 사용. 접속 주소·비밀값은 반환하지 않음. 동시: 2 ≤ `min_rounds` ≤ `max_rounds` ≤ 10, 순차: 4 ≤ `max_rounds` ≤ 20 |
+| `get_state` | `discussion_id`, `seat` | 주제·배경, 진행 방식, 현재 라운드(순차는 턴), 내 차례·제출 여부, 직전 답변(동시: 양쪽, 순차: 상대 직전 턴), 각 답변의 동의 대상 ID, 합의 후보 목록(완료된 라운드의 `proposal` ID·라운드·제안자·본문), 순차 방식의 현재 합의안과 사인 현황, 토론 상태 | 동시 방식 라운드 1은 상대 답변 없음. 진행 중인 라운드의 새 합의안은 상대에게 숨김. 순차 방식에서 아무도 시작하지 않았으면 "먼저 제출하면 선공"을 안내 |
+| `submit` | `discussion_id`, `seat`, `expected_round`, `content`, `proposal`(선택), `open_issues`, 동시 방식: `agreement`·`accepted_proposal_id`, 순차 방식: `sign` | 접수 결과, 다음 차례, 합의 판정 결과 | 같은 번호의 기존 제출이 있으면 그 결과 반환(재시도). 순차 방식은 `agreement`를 받지 않음 |
 | `get_summary` | `discussion_id` | 진행 중: 완료된 라운드·턴만 / 종료 후: 전체 기록과 결론. 각 답변의 합의안 ID와 본문 포함 | 진행 중인 라운드 답변은 노출하지 않음 |
 
 ### 필드 의미

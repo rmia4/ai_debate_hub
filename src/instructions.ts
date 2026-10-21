@@ -1,5 +1,4 @@
-import type { Discussion } from './db/discussions.js';
-import type { Participant } from './oauth/connections.js';
+import type { Discussion, Participant } from './db/discussions.js';
 
 // docs/client-setup.md "AI용 초기 지시문". 웹 생성 화면과 start_discussion이 같은 문구를 쓴다.
 const PARALLEL_RULES = `[규칙]
@@ -23,11 +22,12 @@ const SEQUENTIAL_RULES = `[규칙]
 7. get_state가 토론 종료를 알리면 결과를 한 줄로 요약하고 더 제출하지 않는다.
 8. 확인되지 않은 사실은 추정이라고 표시한다.`;
 
-export const PARTICIPANT_NAME = { claude: 'Claude', codex: 'Codex' } as const;
+export const PARTICIPANT_NAME = { A: 'A석', B: 'B석' } as const;
 
 export function instructionFor(d: Pick<Discussion, 'id' | 'mode' | 'topic' | 'context'>, me: Participant) {
   const parallel = d.mode === 'parallel';
-  return `너는 ai-debate 토론 ${d.id}에 "${PARTICIPANT_NAME[me]}"로 참여한다. 진행 방식은 ${parallel ? '동시' : '순차'} 방식이다. (참여자 역할은 서버가 OAuth 연결 정보로 판별한다.)
+  return `너는 ai-debate 토론 ${d.id}에 ${PARTICIPANT_NAME[me]}으로 참여한다. 진행 방식은 ${parallel ? '동시' : '순차'} 방식이다.
+get_state와 submit을 호출할 때 seat에는 항상 "${me}"를 넣는다. 상대 자리의 값을 넣지 않는다.
 주제: ${d.topic}
 배경: ${d.context || '(없음)'}
 

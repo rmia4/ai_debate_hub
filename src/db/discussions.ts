@@ -1,11 +1,13 @@
 import { randomBytes } from 'node:crypto';
-import type { Participant } from '../oauth/connections.js';
 import type { Db, Queryable } from './db.js';
 import { hitRateLimit } from './rate-limit.js';
 
 export type Mode = 'parallel' | 'sequential';
 export type Status = 'active' | 'agreed' | 'max_reached' | 'closed';
 export type Agreement = 'agree' | 'partial' | 'disagree';
+// 토론 자리. 어떤 AI·세션이 앉을지는 사용자가 지시문으로 정하고, 도구 호출마다 seat 입력으로 받는다
+export type Participant = 'A' | 'B';
+export const PARTICIPANTS: readonly Participant[] = ['A', 'B'];
 
 export interface Discussion {
   id: string;
@@ -28,6 +30,7 @@ export interface Turn {
   id: string;
   round: number;
   participant: Participant;
+  client_name: string | null;
   content: string;
   proposal: string | null;
   agreement: Agreement | null;
@@ -106,7 +109,7 @@ export class DiscussionError extends Error {
 
 const DISCUSSION_COLS = `id, owner_id, topic, context, mode, starter, status, current_round, max_rounds, min_rounds,
   agreed_proposal_id::text AS agreed_proposal_id, ended_at, created_at, updated_at`;
-const TURN_COLS = `id::text AS id, round, participant, content, proposal, agreement,
+const TURN_COLS = `id::text AS id, round, participant, client_name, content, proposal, agreement,
   accepted_proposal_id::text AS accepted_proposal_id, sign, open_issues, created_at`;
 
 const turnsOf = async (q: Queryable, discussionId: string) =>
@@ -315,7 +318,7 @@ export function discussionsFor(db: Db, userId: string) {
     },
 
     // docs/discussion-flow.md "공통 처리 순서"를 그대로 따른다
-    async submit(id: string, me: Participant, input: SubmitInput): Promise<SubmitResult> {
+    async submit(id: string, me: Participant, clientName: string, input: SubmitInput): Promise<SubmitResult> {
       return db.tx(async (q) => {
         let d = await lockOwned(q, id);
         const values = normalize(d.mode, input);
@@ -337,9 +340,9 @@ export function discussionsFor(db: Db, userId: string) {
         else validateSequential(d, turns, me, input);
 
         const { rows: inserted } = await q.query<Turn>(
-          `INSERT INTO turns (discussion_id, round, participant, content, proposal, agreement, accepted_proposal_id, sign, open_issues)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING ${TURN_COLS}`,
-          [id, d.current_round, me, values.content, values.proposal, values.agreement, values.accepted_proposal_id, values.sign, JSON.stringify(values.open_issues)],
+          `INSERT INTO turns (discussion_id, round, participant, client_name, content, proposal, agreement, accepted_proposal_id, sign, open_issues)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING ${TURN_COLS}`,
+          [id, d.current_round, me, clientName, values.content, values.proposal, values.agreement, values.accepted_proposal_id, values.sign, JSON.stringify(values.open_issues)],
         );
         const saved = inserted[0];
         const next = nextState(d, turns, saved, me);
