@@ -90,7 +90,7 @@ export function projectPagesRouter(config: Config, db: Db) {
 
   router.get('/app/projects/new', (_req, res) => {
     const web = res.locals.web!;
-    res.send(page('새 프로젝트', `<p>프로젝트는 사용자당 ${PROJECT_LIMITS.projects}개까지 만들 수 있습니다.</p>${projectForm(web.csrf, '/app/projects/new', {}, '프로젝트 만들기')}`, { nav: web.user.role }));
+    res.send(page('새 프로젝트', `<p>프로젝트는 사용자당 ${PROJECT_LIMITS.projects}개까지 만들 수 있습니다.</p>${projectForm(web.csrf, '/app/projects/new', {}, '프로젝트 만들기')}`, { nav: web }));
   });
 
   router.post('/app/projects/new', formBody, async (req, res, next) => {
@@ -104,7 +104,7 @@ export function projectPagesRouter(config: Config, db: Db) {
       if (!(e instanceof DiscussionError) || !['invalid_settings', 'limit_exceeded'].includes(e.code)) return handle(res, next, e);
       res
         .status(e.code === 'limit_exceeded' ? 409 : 400)
-        .send(page('새 프로젝트', `<p class="warn">${esc(e.message)}</p>${projectForm(web.csrf, '/app/projects/new', body, '프로젝트 만들기')}`, { nav: web.user.role }));
+        .send(page('새 프로젝트', `<p class="warn">${esc(e.message)}</p>${projectForm(web.csrf, '/app/projects/new', body, '프로젝트 만들기')}`, { nav: web }));
     }
   });
 
@@ -135,7 +135,7 @@ export function projectPagesRouter(config: Config, db: Db) {
             <p>삭제하면 이 프로젝트의 배경 항목과 <b>종료된 토론 기록까지 모두</b> 즉시 지워지며 복구할 수 없습니다. 진행 중인 토론이 있으면 삭제할 수 없습니다. 먼저 <a href="/app/account/export.md">내보내기</a>로 기록을 저장하세요.</p>
             <label><input type="checkbox" name="confirm" value="yes" required> 종료된 토론까지 함께 삭제됨을 확인했습니다</label>
             <button type="submit">프로젝트 삭제</button></form>`,
-          { nav: web.user.role },
+          { nav: web },
         ),
       );
     } catch (e) {
@@ -169,7 +169,7 @@ export function projectPagesRouter(config: Config, db: Db) {
     try {
       const web = res.locals.web!;
       const { project } = await projectsFor(db, web.user.id).get(req.params.id);
-      res.send(page(`배경 추가 · ${project.name}`, `${newBackgroundForm(web.csrf, project.id)}`, { nav: web.user.role }));
+      res.send(page(`배경 추가 · ${project.name}`, `${newBackgroundForm(web.csrf, project.id)}`, { nav: web }));
     } catch (e) {
       handle(res, next, e);
     }
@@ -188,7 +188,7 @@ export function projectPagesRouter(config: Config, db: Db) {
       if (!(e instanceof DiscussionError) || !['invalid_settings', 'limit_exceeded'].includes(e.code)) return handle(res, next, e);
       res
         .status(e.code === 'limit_exceeded' ? 409 : 400)
-        .send(page('배경 추가', `${newBackgroundForm(web.csrf, req.params.id, body, e.message)}`, { nav: web.user.role }));
+        .send(page('배경 추가', `${newBackgroundForm(web.csrf, req.params.id, body, e.message)}`, { nav: web }));
     }
   });
 
@@ -219,7 +219,7 @@ export function projectPagesRouter(config: Config, db: Db) {
             <p>진행 중인 토론이 참조하면 삭제할 수 없습니다. 종료된 토론이 참조하면 목록에서만 사라지고, 그 토론 기록에는 "삭제됨"으로 남습니다.</p>
             <label><input type="checkbox" name="confirm" value="yes" required> 이 항목을 삭제합니다</label>
             <button type="submit">항목 삭제</button></form>`,
-          { nav: web.user.role },
+          { nav: web },
         ),
       );
     } catch (e) {

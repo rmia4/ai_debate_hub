@@ -74,7 +74,7 @@ export function adminRouter(config: Config, db: Db) {
           ${runs.length ? `<table><tr><th>실행</th><th>결과</th><th>삭제 건수</th></tr>${runRows}</table>` : '<p>실행 기록이 없습니다.</p>'}
           <h2>사용자</h2>
           <table><tr><th>이름</th><th>역할</th><th>상태</th><th>토론</th><th>용량(바이트)</th><th>가입</th><th></th></tr>${userRows}</table>`,
-          { nav: web.user.role },
+          { nav: web },
         ),
       );
     } catch (e) {
