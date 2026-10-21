@@ -1,6 +1,6 @@
 // Vercel 진입점: Express 앱을 기본 내보내기로 둔다
 import express from 'express';
-import { createApp } from './app.js';
+import { createApp } from './create-app.js';
 import { loadConfig, missingEnv } from './config.js';
 import { createPgDb } from './db/db.js';
 
