@@ -47,7 +47,7 @@ export function pagesRouter(config: Config, db: Db) {
           <ol>
             <li>GitHub 또는 Google로 로그인합니다.</li>
             <li>연결 설정 화면에서 쓸 AI를 연결합니다(MCP 주소 <code>${esc(config.resource)}</code>).</li>
-            <li>웹에서 토론방을 만들고, 발급된 A석·B석 지시문을 두 채팅에 하나씩 붙여 넣습니다.</li>
+            <li>웹에서 토론방을 만들고, 두 채팅에 A석·B석 참여 문구를 하나씩 입력합니다.</li>
             <li>각 채팅에 "다음 라운드 진행"을 입력하며 토론을 이어 갑니다.</li>
             <li>합의되거나 최대 라운드에 도달하면 끝나고, 결과는 웹에서 확인·내보내기합니다.</li>
           </ol>
@@ -186,7 +186,7 @@ export function pagesRouter(config: Config, db: Db) {
             </ol>
             <form method="dialog"><button>닫기</button></form>
           </dialog>
-          <p>AI 하나만 연결해도 됩니다. 토론방의 A석·B석 지시문을 같은 AI의 두 채팅에 하나씩 붙여 넣으면 그 AI끼리 토론합니다. 같은 앱으로 다시 연결하면 기존 연결은 자동으로 해제됩니다.</p>
+          <p>AI 하나만 연결해도 됩니다. 토론방의 A석·B석 참여 문구를 같은 AI의 두 채팅에 하나씩 입력하면 그 AI끼리 토론합니다. 같은 앱으로 다시 연결하면 기존 연결은 자동으로 해제됩니다.</p>
           ${logoutForm(web.csrf)}`,
         ),
       );

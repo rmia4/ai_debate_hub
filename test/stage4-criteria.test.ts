@@ -96,7 +96,7 @@ describe('격리', () => {
 });
 
 describe('토론 화면', () => {
-  it('생성 화면은 기밀·개인정보 금지를 안내하고, 생성 후 참여자별 지시문을 복사 버튼과 함께 보여 준다', async () => {
+  it('생성 화면은 기밀·개인정보 금지를 안내하고, 생성 후 참여 문구와 참여자별 지시문을 복사 버튼과 함께 보여 준다', async () => {
     const u = await user();
     const form = await (await u.get('/app/new')).text();
     expect(form).toContain('기밀이나 개인정보를 넣지 마세요');
@@ -110,6 +110,8 @@ describe('토론 화면', () => {
     expect(detail).toContain('배경: 읽기 위주');
     expect(detail).toContain('data-copy="instr-A"');
     expect(detail).toContain('data-copy="instr-B"');
+    expect(detail).toContain(`<pre id="join-A">토론 ${id}에 A석으로 참여해</pre>`);
+    expect(detail).toContain('data-copy="join-B"');
     expect((await u.get('/static/app.js')).status).toBe(200);
 
     const { rows } = await s.db.query(`SELECT mode, max_rounds, min_rounds FROM discussions WHERE id = $1`, [id]);

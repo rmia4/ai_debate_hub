@@ -24,6 +24,20 @@ const SEQUENTIAL_RULES = `[규칙]
 
 export const PARTICIPANT_NAME = { A: 'A석', B: 'B석' } as const;
 
+export const rulesFor = (mode: Discussion['mode']) => (mode === 'parallel' ? PARALLEL_RULES : SEQUENTIAL_RULES);
+
+// MCP 초기화 응답의 instructions. 사용자가 지시문을 붙여 넣지 않고 짧은 말로 참여시킬 때의 진입 규칙.
+export const SERVER_INSTRUCTIONS = `ai-debate-hub는 두 AI 채팅이 한 주제로 토론해 합의안을 만드는 서비스다.
+사용자가 "토론 참여해, A석"이나 "세비체 토론에 B석으로"처럼 자리(A석 또는 B석)를 알려 주면:
+1. 그 자리를 get_state·submit의 seat에 토론 내내 같은 값으로 넣는다. 자리를 말하지 않았으면 사용자에게 묻는다.
+2. 토론 ID를 알려 주지 않았으면 discussion_id 없이 get_state를 호출한다.
+   - 진행 중인 토론이 여럿이라는 오류가 오면, 사용자가 말한 주제와 뜻이 맞는 토론이 목록에 하나뿐일 때 그 discussion_id로 다시 호출한다. 주제를 말하지 않았거나 맞는 토론이 없거나 여럿이면 목록을 보여 주고 사용자에게 고르게 한다.
+   - 토론이 하나만 조회되어도 사용자가 말한 주제와 다르면 제출하지 말고 사용자에게 확인한다.
+3. get_state 응답의 rules를 이 토론의 규칙으로 따르고, guide 안내대로 submit한다.`;
+
+// 웹 화면의 복사용 한 줄. 지시문 전체는 서버가 get_state로 전달한다.
+export const joinMessage = (d: Pick<Discussion, 'id'>, me: Participant) => `토론 ${d.id}에 ${PARTICIPANT_NAME[me]}으로 참여해`;
+
 export function instructionFor(d: Pick<Discussion, 'id' | 'mode' | 'topic' | 'context'>, me: Participant) {
   const parallel = d.mode === 'parallel';
   return `너는 ai-debate 토론 ${d.id}에 ${PARTICIPANT_NAME[me]}으로 참여한다. 진행 방식은 ${parallel ? '동시' : '순차'} 방식이다.
@@ -31,5 +45,5 @@ get_state와 submit을 호출할 때 seat에는 항상 "${me}"를 넣는다. 상
 주제: ${d.topic}
 배경: ${d.context || '(없음)'}
 
-${parallel ? PARALLEL_RULES : SEQUENTIAL_RULES}`;
+${rulesFor(d.mode)}`;
 }
