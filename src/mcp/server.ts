@@ -5,13 +5,13 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { Db } from '../db/db.js';
 import { currentProposal, DiscussionError, discussionsFor, PARTICIPANTS, type Discussion, type Participant, type Turn } from '../db/discussions.js';
-import { instructionFor } from '../instructions.js';
+import { instructionFor, rulesFor, SERVER_INSTRUCTIONS } from '../instructions.js';
 import type { Caller } from './caller.js';
 
 const RULE = '쉽게 동의하지 말고 근거를 제시할 것.';
 
 const discussionId = z.string().max(64).describe('토론 ID');
-const seat = z.enum(['A', 'B']).describe('지시문에 적힌 내 자리(A 또는 B). 토론 내내 같은 값을 쓴다');
+const seat = z.enum(['A', 'B']).describe('사용자가 정해 준 내 자리(A 또는 B). 토론 내내 같은 값을 쓴다');
 
 const json = (value: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
 const fail = (error: string, message: string, extra: object = {}): CallToolResult => ({
@@ -91,6 +91,8 @@ function stateView(d: Discussion, turns: Turn[], me: Participant) {
     my_turn: isMyTurn(d, turns, me),
     agreed_proposal: agreedProposal(d, turns),
     guide: guide(d, turns, me),
+    // 지시문을 붙여 넣지 않고 참여한 AI도 규칙을 받도록, 내 제출이 없는 동안 함께 보낸다
+    ...(d.status === 'active' && !turns.some((t) => t.participant === me) ? { rules: rulesFor(d.mode) } : {}),
   };
   if (d.mode === 'parallel') {
     const lastRound = Math.max(0, ...visible.map((t) => t.round));
@@ -123,8 +125,21 @@ function nextStep(d: Discussion, turns: Turn[], me: Participant) {
 }
 
 function buildServer(caller: Caller, db: Db): McpServer {
-  const server = new McpServer({ name: 'ai-debate-hub', version: '0.1.0' });
+  const server = new McpServer({ name: 'ai-debate-hub', version: '0.1.0' }, { instructions: SERVER_INSTRUCTIONS });
   const repo = discussionsFor(db, caller.userId);
+
+  // discussion_id를 생략하면 진행 중인 토론이 하나일 때만 그것을 쓴다. 여럿이면 엉뚱한 방에 제출하지 않도록 고르게 한다.
+  async function resolveId(id: string | undefined): Promise<string | CallToolResult> {
+    if (id) return id;
+    const active = (await repo.list()).filter((d) => d.status === 'active');
+    if (active.length === 0) return fail('not_found', '진행 중인 토론이 없습니다. 웹에서 토론방을 만들거나 토론 ID를 알려 달라고 사용자에게 요청하세요');
+    if (active.length > 1) {
+      return fail('choose_discussion', '진행 중인 토론이 여럿입니다. 사용자가 말한 주제와 맞는 토론이 하나뿐이면 그 discussion_id로 다시 호출하고, 아니면 목록을 보여 주고 사용자에게 고르게 하세요', {
+        discussions: active.map((d) => ({ discussion_id: d.id, topic: d.topic, mode: d.mode, created_at: d.created_at })),
+      });
+    }
+    return active[0].id;
+  }
 
   server.registerTool(
     'start_discussion',
@@ -154,12 +169,16 @@ function buildServer(caller: Caller, db: Db): McpServer {
   server.registerTool(
     'get_state',
     {
-      description: `토론의 현재 상태, 내 차례 여부, 직전 답변과 합의 후보를 조회한다. 진행 중인 라운드의 상대 답변은 보이지 않는다. ${RULE}`,
-      inputSchema: { discussion_id: discussionId, seat },
+      description:
+        `토론의 현재 상태, 내 차례 여부, 직전 답변과 합의 후보를 조회한다. 진행 중인 라운드의 상대 답변은 보이지 않는다. ` +
+        `처음 참여할 때는 rules에 이 토론의 규칙이 온다. ${RULE}`,
+      inputSchema: { discussion_id: discussionId.optional().describe('토론 ID. 생략하면 진행 중인 토론이 하나일 때 그 토론을 조회한다'), seat },
     },
     ({ discussion_id, seat: me }) =>
       run(async () => {
-        const { discussion, turns } = await repo.get(discussion_id);
+        const id = await resolveId(discussion_id);
+        if (typeof id !== 'string') return id;
+        const { discussion, turns } = await repo.get(id);
         return json(stateView(discussion, turns, me));
       }),
   );

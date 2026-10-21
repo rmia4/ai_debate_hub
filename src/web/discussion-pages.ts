@@ -14,7 +14,7 @@ import {
   type Turn,
 } from '../db/discussions.js';
 import { deleteUser } from '../db/users.js';
-import { instructionFor, PARTICIPANT_NAME } from '../instructions.js';
+import { instructionFor, joinMessage, PARTICIPANT_NAME } from '../instructions.js';
 import { appNav, csrfField, esc, page } from './html.js';
 import { discussionMarkdown, MODE_LABEL, renderMarkdown, STATUS_LABEL } from './markdown.js';
 import { checkCsrf, endSession } from './session.js';
@@ -103,12 +103,19 @@ function conclusionOf(d: Discussion, turns: Turn[]) {
 }
 
 function instructionsSection(d: Discussion) {
-  return `<h2>참여자별 지시문</h2>
-    <p>토론할 두 AI 채팅에 하나씩 붙여 넣으세요. Claude와 Codex처럼 다른 AI여도 되고, 같은 AI의 다른 채팅이어도 됩니다. 지시문에는 인증 정보가 들어 있지 않습니다.</p>
+  return `<h2>참여 방법</h2>
+    <p>토론할 두 AI 채팅에 아래 한 줄을 하나씩 입력하세요. 규칙은 AI가 서버에서 받아 갑니다. Claude와 Codex처럼 다른 AI여도 되고, 같은 AI의 다른 채팅이어도 됩니다. 토론 ID 대신 "세비체 토론에 A석으로 참여해"처럼 주제를 대충 말해도 되고, 진행 중인 토론이 이것 하나뿐이면 "토론 참여해, A석"이라고만 해도 됩니다.</p>
+    ${PARTICIPANTS.map(
+      (p) => `<h3>${PARTICIPANT_NAME[p]} <button type="button" data-copy="join-${p}">복사</button></h3>
+      <pre id="join-${p}">${esc(joinMessage(d, p))}</pre>`,
+    ).join('')}
+    <details><summary>전체 지시문 (AI가 서버 안내를 따르지 않을 때 붙여 넣기)</summary>
+    <p>지시문에는 인증 정보가 들어 있지 않습니다.</p>
     ${PARTICIPANTS.map(
       (p) => `<h3>${PARTICIPANT_NAME[p]} <button type="button" data-copy="instr-${p}">복사</button></h3>
       <pre id="instr-${p}">${esc(instructionFor(d, p))}</pre>`,
-    ).join('')}`;
+    ).join('')}
+    </details>`;
 }
 
 function newForm(csrf: string, values: Record<string, string> = {}, error = '') {
@@ -235,7 +242,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
         page(
           d.topic,
           `${appNav(web.user.role)}
-          ${req.query.created ? '<p class="warn">토론방을 만들었습니다. 아래 지시문을 각 AI 채팅에 붙여 넣으세요.</p>' : ''}
+          ${req.query.created ? '<p class="warn">토론방을 만들었습니다. 아래 참여 문구를 각 AI 채팅에 입력하세요.</p>' : ''}
           ${retentionNotice(d)}
           <p>토론 ID <code>${esc(d.id)}</code> · ${MODE_LABEL[d.mode]} 방식 · <span class="badge">${STATUS_LABEL[d.status]}</span> · ${roundsLabel(d)}${
             d.mode === 'parallel' ? ` (최소 ${d.min_rounds})` : ''
