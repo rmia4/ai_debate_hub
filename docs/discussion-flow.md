@@ -52,9 +52,9 @@ MCP는 AI가 먼저 호출해야 응답하므로 서버가 채팅에 지시문�
 | 도구 | 입력 | 반환 | 비고 |
 | --- | --- | --- | --- |
 | `start_discussion` | `topic`, `context`(선택), `mode`(`parallel`/`sequential`, 기본 `parallel`), `max_rounds`(동시 기본 5, 순차 기본 10), `min_rounds`(동시 기본 2), `project_id`(선택), `background_ids`(선택, `project_id`와 함께만. 생략하면 참조 없음. 참조마다 `get_state` 목록과 읽기 비용이 늘어나므로 필요한 항목만 고름) | `discussion_id`, 자리별(`A`/`B`) 지시문 | 웹 생성이 기본이고, 채팅에서 만들 때만 사용. 접속 주소·비밀값은 반환하지 않음. 동시: 2 ≤ `min_rounds` ≤ `max_rounds` ≤ 10, 순차: 4 ≤ `max_rounds` ≤ 20 |
-| `get_state` | `discussion_id`(선택), `seat` | 주제·배경, 진행 방식, 현재 라운드(순차는 턴), 내 차례·제출 여부, 직전 답변(동시: 양쪽, 순차: 상대 직전 턴), 각 답변의 동의 대상 ID, 합의 후보 목록(완료된 라운드의 `proposal` ID·라운드·제안자·본문), 순차 방식의 현재 합의안과 사인 현황, 토론 상태, 내 제출이 없는 동안 방식별 규칙(`rules`) | `discussion_id`를 생략하면 진행 중인 토론이 하나일 때 그 토론, 없으면 `not_found`, 여럿이면 `choose_discussion`과 목록. 동시 방식 라운드 1은 상대 답변 없음. 진행 중인 라운드의 새 합의안은 상대에게 숨김. 순차 방식에서 아무도 시작하지 않았으면 "먼저 제출하면 선공"을 안내 |
+| `get_state` | `discussion_id`(선택), `seat` | 주제·배경, 진행 방식, 현재 라운드(순차는 턴), 내 차례·제출 여부, 직전 답변(동시: 양쪽, 순차: 상대 직전 턴), 각 답변의 동의 대상 ID, 합의 후보 목록(완료된 라운드의 `proposal` ID·라운드·제안자·본문), 순차 방식의 현재 합의안과 사인 현황, 토론 상태, 내 제출이 없는 동안 방식별 규칙(`rules`) | `discussion_id`를 생략하면 진행 중인 토론이 하나일 때 그 토론, 없으면 `not_found`, 여럿이면 `choose_discussion`과 목록. 동시 방식 라운드 1은 상대 답변 없음. 진행 중인 라운드의 새 합의안은 상대에게 숨김. 순차 방식에서 아무도 시작하지 않았으면 "먼저 제출하면 선공"을 안내. 동시 방식은 직전 라운드 동의 ID가 엇갈렸을 때 `recommended_proposal_id`([동의 대상이 엇갈렸을 때](#동의-대상이-엇갈렸을-때)) |
 | `submit` | `discussion_id`, `seat`, `expected_round`, `content`, `proposal`(선택), `open_issues`, 동시 방식: `agreement`·`accepted_proposal_id`, 순차 방식: `sign` | 접수 결과, 다음 차례, 합의 판정 결과 | 같은 번호의 기존 제출이 있으면 그 결과 반환(재시도). 순차 방식은 `agreement`를 받지 않음 |
-| `get_summary` | `discussion_id` | 진행 중: 완료된 라운드·턴만 / 종료 후: 전체 기록과 결론. 각 답변의 합의안 ID와 본문 포함 | 진행 중인 라운드 답변은 노출하지 않음 |
+| `get_summary` | `discussion_id` | 진행 중: 완료된 라운드·턴만 / 종료 후: 전체 기록과 결론. 각 답변의 합의안 ID와 본문 포함 | 진행 중인 라운드 답변은 노출하지 않음. 마지막 라운드 동의 대상이 엇갈린 채 `max_reached`로 끝났으면 `crossed_agreement` |
 | `list_discussions` | `status`(선택: `active`/`agreed`/`max_reached`/`closed`) | 내 토론의 ID·주제·상태·방식·프로젝트 ID·최근 수정 시각, 최근 수정 순 | 종료된 토론도 포함. 본문은 넣지 않음. 보관 한도가 50개라 페이지를 나누지 않음 |
 
 프로젝트 토론이면 `get_state`·`get_summary`에 `project_id`와 `references`(참조 항목의 ID·종류·제목·요약, text는 본문 길이, link·file은 위치, 현재 `revision`, 시작 시점 `revision_at_start`, `changed_since_start`, 삭제됐으면 `deleted`)가 더해집니다. 본문은 넣지 않습니다. 단순 토론의 응답 모양은 그대로입니다.
@@ -134,6 +134,15 @@ MCP는 AI가 먼저 호출해야 응답하므로 서버가 채팅에 지시문�
 4. 상대도 제출했다면 라운드를 마감합니다. 양쪽 모두 `agree`이고, `accepted_proposal_id`가 같고, 현재 라운드 ≥ `min_rounds`이면 `agreed`로 종료하고 `agreed_proposal_id`를 기록합니다.
 5. 합의가 아니고 현재 라운드가 `max_rounds`이면 `max_reached`로 종료합니다.
 6. 둘 다 아니면 `current_round`를 1 올립니다.
+
+#### 동의 대상이 엇갈렸을 때
+
+양쪽이 매 라운드 상대가 직전에 동의한 안으로 옮겨 가면 내용은 같아도 ID가 계속 엇갈려 `max_reached`로 끝날 수 있습니다. 서버는 판정을 바꾸지 않고(라운드를 걸친 자동 합의, 종료 기록 소급 변경, 자동 연장 없음) 고를 안만 추천합니다. 라운드를 걸쳐 합의로 보지 않는 이유는, A가 X에서 Y로 옮겼다면 X를 버렸다는 뜻일 수 있기 때문입니다.
+
+- **감지**: 직전 완료 라운드에서 양쪽이 `agree`했고 `accepted_proposal_id`가 서로 다를 때.
+- **추천**: 그 두 안 중 완료된 기록에 양쪽 모두의 `agree` 이력이 있는 안을 우선합니다. 둘 다 해당하거나 둘 다 아니면 ID가 작은 안을 고릅니다(`turns.id`는 증가 시퀀스). 안을 작성한 것은 동의 이력으로 세지 않습니다. 완료된 라운드만 쓰므로 진행 중 라운드의 제출과 관계없이 양쪽에 같은 값이 나옵니다.
+- `get_state`는 `recommended_proposal_id`(엇갈림이 없으면 `null`)를 주고, `guide`에 추천 ID와 선정 이유, "수정 없이 받아들일 수 있으면 이 ID에 agree, 아니면 partial/disagree와 구체적 쟁점"을 안내합니다. 추천은 동의 의무가 아닙니다.
+- 마지막 라운드에서 엇갈린 채 `max_reached`로 끝나면 상태는 그대로 두고, `get_summary`의 `crossed_agreement`와 웹 결론·내보내기에 "양쪽 동의 대상이 엇갈림: A→X, B→Y"를 표시합니다.
 
 ### 순차 방식
 

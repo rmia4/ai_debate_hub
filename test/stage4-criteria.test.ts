@@ -166,6 +166,24 @@ describe('토론 화면', () => {
     expect(text).toContain('남은 이견: 비용 미확정');
   });
 
+  it('마지막 라운드에서 동의 대상이 엇갈린 채 끝나면 결론과 내보내기에 엇갈림을 표시한다', async () => {
+    const u = await user(true);
+    const { id } = await webCreate(u, { min_rounds: '2', max_rounds: '2' });
+    const submit = (token: string, args: Record<string, unknown>) =>
+      tool(token, 'submit', { discussion_id: id, content: '근거', ...args });
+    const a = (await submit(u.claude, { expected_round: 1, proposal: '안 A' })).data.submission.id;
+    const b = (await submit(u.codex, { expected_round: 1, proposal: '안 B' })).data.submission.id;
+    await submit(u.claude, { expected_round: 2, agreement: 'agree', accepted_proposal_id: b });
+    const end = await submit(u.codex, { expected_round: 2, agreement: 'agree', accepted_proposal_id: a });
+    expect(end.data.status).toBe('max_reached');
+
+    const text = `양쪽 동의 대상이 엇갈림: A→${b}, B→${a}`;
+    const detail = await (await u.get(`/app/d/${id}`)).text();
+    expect(detail).toContain('최대 도달·합의 미확정');
+    expect(detail).toContain(text);
+    expect(await (await u.get(`/app/d/${id}.md`)).text()).toContain(text);
+  });
+
   it('강제 종료하면 closed가 되고 이후 MCP 제출은 거부된다', async () => {
     const u = await user();
     const { id } = await webCreate(u);

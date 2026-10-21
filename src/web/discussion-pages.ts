@@ -9,6 +9,7 @@ import {
   RETENTION_DAYS,
   currentProposal,
   discussionsFor,
+  finalCrossing,
   type CreateInput,
   type Discussion,
   type ProjectRef,
@@ -17,7 +18,7 @@ import {
 } from '../db/discussions.js';
 import { projectsFor, type Background } from '../db/projects.js';
 import { deleteUser } from '../db/users.js';
-import { instructionFor, joinMessage, PARTICIPANT_NAME } from '../instructions.js';
+import { crossingText, instructionFor, joinMessage, PARTICIPANT_NAME } from '../instructions.js';
 import { appNav, csrfField, esc, page } from './html.js';
 import { discussionMarkdown, KIND_LABEL, MODE_LABEL, projectMarkdown, renderMarkdown, STATUS_LABEL } from './markdown.js';
 import { checkCsrf, endSession } from './session.js';
@@ -102,7 +103,8 @@ function conclusionOf(d: Discussion, turns: Turn[]) {
     const proposal = currentProposal(turns);
     return `<p><span class="badge">${STATUS_LABEL[d.status]}</span></p>${proposal ? `<p>현재 합의안 #${esc(proposal.id)}</p>${renderMarkdown(proposal.proposal!)}` : ''}`;
   }
-  return `<p><span class="badge">${STATUS_LABEL[d.status]}</span></p>`;
+  const crossing = finalCrossing(d, turns);
+  return `<p><span class="badge">${STATUS_LABEL[d.status]}</span></p>${crossing ? `<p class="warn">${esc(crossingText(crossing))}</p>` : ''}`;
 }
 
 // 참조 배경 목록. 시작 뒤 바뀐 항목은 "토론 중 수정됨", 삭제된 항목은 "삭제됨"(text 본문은 펼쳐 볼 수 있다)
