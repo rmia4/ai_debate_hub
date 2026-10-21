@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { PGlite, type Transaction } from '@electric-sql/pglite';
@@ -75,6 +75,11 @@ export interface TestServer {
   close(): Promise<void>;
 }
 
+// 운영과 같은 모양의 키(scripts/gen-keys.ts: ES256 하나). 개발용 기본 키로는 서명 알고리즘 문제를 못 잡는다.
+const TEST_JWKS = JSON.stringify({
+  keys: [{ ...generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ format: 'jwk' }), kid: 'test', use: 'sig', alg: 'ES256' }],
+});
+
 export async function startTestServer(): Promise<TestServer> {
   const db = createPgliteDb();
   await migrate(db);
@@ -89,6 +94,7 @@ export async function startTestServer(): Promise<TestServer> {
     GITHUB_CLIENT_SECRET: 'github-secret',
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET: 'google-secret',
+    JWKS: TEST_JWKS,
   });
   server.on('request', createApp(config, db));
   return { baseUrl, config, db, close: () => new Promise((r) => server.close(() => r())) };
