@@ -12,6 +12,7 @@ export const PARTICIPANTS: readonly Participant[] = ['A', 'B'];
 export interface Discussion {
   id: string;
   owner_id: string;
+  project_id: string | null;
   topic: string;
   context: string;
   mode: Mode;
@@ -46,6 +47,28 @@ export interface CreateInput {
   mode?: Mode;
   max_rounds?: number;
   min_rounds?: number;
+  // 프로젝트 토론만. background_ids를 생략하면 프로젝트의 모든 배경 항목을 참조한다
+  project_id?: string;
+  background_ids?: string[];
+}
+
+// 토론이 참조하는 배경 항목. 본문은 넣지 않는다(삭제된 text 항목만 body를 채워 웹 기록에 남긴다)
+export interface Reference {
+  id: string;
+  kind: 'text' | 'link' | 'file';
+  title: string;
+  summary: string;
+  location: string | null;
+  body_length: number;
+  revision: number;
+  revision_at_start: number;
+  deleted: boolean;
+  body?: string;
+}
+
+export interface ProjectRef {
+  id: string;
+  name: string;
 }
 
 export interface SubmitInput {
@@ -66,22 +89,34 @@ export interface Usage {
   active: number;
   stored: number;
   bytes: number;
+  // bytes 중 삭제됐지만 과거 토론 기록 때문에 보관 중인 배경 항목의 용량
+  retainedBytes: number;
   createdToday: number;
 }
 
 const createKey = (userId: string) => `discussion-create:${userId}`;
 const DAY_SECONDS = 24 * 60 * 60;
 
-// 텍스트 용량: topic·context와 모든 답변의 content·proposal·open_issues 문자열의 UTF-8 바이트 합
-async function usageOf(q: Queryable, userId: string): Promise<Usage> {
+// 배경 항목 한 행의 바이트: 제목·요약·본문·위치. 소프트 삭제된 항목도 저장 공간을 쓰므로 센다
+const BACKGROUND_BYTES = `octet_length(b.title) + octet_length(b.summary) + octet_length(b.body) + coalesce(octet_length(b.location), 0)`;
+
+// 텍스트 용량: topic·context, 모든 답변의 content·proposal·open_issues 문자열, 배경 항목의 UTF-8 바이트 합.
+// owner는 사용자 ID를 가리키는 SQL 식($1 또는 u.id). usageOf와 운영자 화면(listUsersWithUsage)이 같은 식을 쓴다.
+export const usageBytesSql = (owner: string) => `((SELECT coalesce(sum(octet_length(topic) + octet_length(context)), 0) FROM discussions d WHERE d.owner_id = ${owner})
+        + (SELECT coalesce(sum(octet_length(t.content) + coalesce(octet_length(t.proposal), 0)
+             + (SELECT coalesce(sum(octet_length(x)), 0) FROM jsonb_array_elements_text(t.open_issues) x)), 0)
+           FROM turns t JOIN discussions d ON d.id = t.discussion_id WHERE d.owner_id = ${owner})
+        + (SELECT coalesce(sum(${BACKGROUND_BYTES}), 0)
+           FROM project_backgrounds b JOIN projects p ON p.id = b.project_id WHERE p.owner_id = ${owner}))::float8`;
+
+export async function usageOf(q: Queryable, userId: string): Promise<Usage> {
   const { rows } = await q.query<Usage>(
     `SELECT
        (SELECT count(*) FROM discussions WHERE owner_id = $1 AND status = 'active')::int AS active,
        (SELECT count(*) FROM discussions WHERE owner_id = $1)::int AS stored,
-       ((SELECT coalesce(sum(octet_length(topic) + octet_length(context)), 0) FROM discussions WHERE owner_id = $1)
-        + (SELECT coalesce(sum(octet_length(t.content) + coalesce(octet_length(t.proposal), 0)
-             + (SELECT coalesce(sum(octet_length(x)), 0) FROM jsonb_array_elements_text(t.open_issues) x)), 0)
-           FROM turns t JOIN discussions d ON d.id = t.discussion_id WHERE d.owner_id = $1))::float8 AS bytes,
+       ${usageBytesSql('$1')} AS bytes,
+       (SELECT coalesce(sum(${BACKGROUND_BYTES}), 0) FROM project_backgrounds b JOIN projects p ON p.id = b.project_id
+        WHERE p.owner_id = $1 AND b.deleted_at IS NOT NULL)::float8 AS "retainedBytes",
        (SELECT coalesce(max(count), 0) FROM rate_limits
         WHERE key = $2 AND window_start = to_timestamp(floor(extract(epoch FROM now()) / $3::int) * $3::int))::int AS "createdToday"`,
     [userId, createKey(userId), DAY_SECONDS],
@@ -100,20 +135,33 @@ export class DiscussionError extends Error {
       | 'not_your_turn'
       | 'opponent_started'
       | 'invalid_combination'
-      | 'not_ended',
+      | 'not_ended'
+      | 'revision_mismatch'
+      | 'in_use',
     message: string,
   ) {
     super(message);
   }
 }
 
-const DISCUSSION_COLS = `id, owner_id, topic, context, mode, starter, status, current_round, max_rounds, min_rounds,
+const DISCUSSION_COLS = `id, owner_id, project_id, topic, context, mode, starter, status, current_round, max_rounds, min_rounds,
   agreed_proposal_id::text AS agreed_proposal_id, ended_at, created_at, updated_at`;
 const TURN_COLS = `id::text AS id, round, participant, client_name, content, proposal, agreement,
   accepted_proposal_id::text AS accepted_proposal_id, sign, open_issues, created_at`;
 
 const turnsOf = async (q: Queryable, discussionId: string) =>
   (await q.query<Turn>(`SELECT ${TURN_COLS} FROM turns WHERE discussion_id = $1 ORDER BY round, id`, [discussionId])).rows;
+
+const refsOf = async (q: Queryable, discussionId: string) =>
+  (
+    await q.query<Reference & { body: string | null }>(
+      `SELECT b.id, b.kind, b.title, b.summary, b.location, length(b.body) AS body_length, b.revision, r.revision_at_start,
+         b.deleted_at IS NOT NULL AS deleted, CASE WHEN b.deleted_at IS NOT NULL AND b.kind = 'text' THEN b.body END AS body
+       FROM discussion_backgrounds r JOIN project_backgrounds b ON b.id = r.background_id
+       WHERE r.discussion_id = $1 ORDER BY b.created_at, b.id`,
+      [discussionId],
+    )
+  ).rows.map(({ body, ...r }): Reference => (body === null ? r : { ...r, body }));
 
 // 순차 방식의 현재 합의안: 가장 최근 proposal
 export const currentProposal = (turns: Turn[]) => turns.findLast((t) => t.proposal !== null);
@@ -124,6 +172,9 @@ function settingsOf(input: CreateInput) {
   }
   if ((input.context ?? '').length > INPUT_LIMITS.context) {
     throw new DiscussionError('invalid_settings', `배경 설명은 ${INPUT_LIMITS.context}자까지입니다`);
+  }
+  if (input.background_ids !== undefined && !input.project_id) {
+    throw new DiscussionError('invalid_settings', 'background_ids는 project_id와 함께만 씁니다');
   }
   const mode = input.mode ?? 'parallel';
   if (mode === 'parallel') {
@@ -259,14 +310,36 @@ export function discussionsFor(db: Db, userId: string) {
         if (usage.stored >= CREATE_LIMITS.stored || usage.bytes + added > CREATE_LIMITS.bytes) {
           throw new DiscussionError('limit_exceeded', '보관 한도(50개·5MB)에 도달했습니다. 웹에서 종료된 토론을 삭제하세요');
         }
+        // 프로젝트 소유와 각 항목의 소속을 사용자 행 잠금 안에서 확인한다. 같은 잠금을 잡는 배경 삭제와 엇갈리지 않는다.
+        let backgroundIds: string[] = [];
+        if (input.project_id) {
+          const project = await q.query(`SELECT id FROM projects WHERE id = $1 AND owner_id = $2`, [input.project_id, userId]);
+          if (!project.rows[0]) throw new DiscussionError('not_found', '존재하지 않는 프로젝트입니다');
+          const picked = input.background_ids;
+          const { rows } = await q.query<{ id: string }>(
+            `SELECT id FROM project_backgrounds WHERE project_id = $1 AND deleted_at IS NULL${picked ? ' AND id = ANY($2)' : ''}`,
+            picked ? [input.project_id, picked] : [input.project_id],
+          );
+          backgroundIds = rows.map((r) => r.id);
+          if (picked && backgroundIds.length !== new Set(picked).size) {
+            throw new DiscussionError('not_found', '이 프로젝트에 없는 배경 항목이 있습니다');
+          }
+        }
         if (!(await hitRateLimit(q, createKey(userId), DAY_SECONDS, CREATE_LIMITS.perDay))) {
           throw new DiscussionError('limit_exceeded', `토론 생성은 하루 ${CREATE_LIMITS.perDay}개까지입니다`);
         }
         const created = await q.query<Discussion>(
-          `INSERT INTO discussions (id, owner_id, topic, context, mode, max_rounds, min_rounds)
-           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING ${DISCUSSION_COLS}`,
-          [randomBytes(12).toString('base64url'), userId, input.topic, context, mode, max, min],
+          `INSERT INTO discussions (id, owner_id, project_id, topic, context, mode, max_rounds, min_rounds)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING ${DISCUSSION_COLS}`,
+          [randomBytes(12).toString('base64url'), userId, input.project_id ?? null, input.topic, context, mode, max, min],
         );
+        if (backgroundIds.length) {
+          await q.query(
+            `INSERT INTO discussion_backgrounds (discussion_id, background_id, revision_at_start)
+             SELECT $1, id, revision FROM project_backgrounds WHERE id = ANY($2)`,
+            [created.rows[0].id, backgroundIds],
+          );
+        }
         return created.rows[0];
       });
     },
@@ -282,10 +355,12 @@ export function discussionsFor(db: Db, userId: string) {
 
     usage: () => usageOf(db, userId),
 
-    // 계정 내보내기용: 모든 토론과 답변
-    async all(): Promise<{ discussion: Discussion; turns: Turn[] }[]> {
+    // 계정 내보내기용: 모든 토론과 답변, 참조 배경
+    async all(): Promise<{ discussion: Discussion; turns: Turn[]; refs: Reference[] }[]> {
       const list = await this.list();
-      return Promise.all(list.map(async (discussion) => ({ discussion, turns: await turnsOf(db, discussion.id) })));
+      return Promise.all(
+        list.map(async (discussion) => ({ discussion, turns: await turnsOf(db, discussion.id), refs: await refsOf(db, discussion.id) })),
+      );
     },
 
     // 진행 중인 토론을 수동 종료한다
@@ -311,10 +386,14 @@ export function discussionsFor(db: Db, userId: string) {
       });
     },
 
-    async get(id: string): Promise<{ discussion: Discussion; turns: Turn[] }> {
+    // project는 프로젝트 토론일 때만 채운다
+    async get(id: string): Promise<{ discussion: Discussion; turns: Turn[]; project: ProjectRef | null; refs: Reference[] }> {
       const { rows } = await db.query<Discussion>(`SELECT ${DISCUSSION_COLS} FROM discussions WHERE id = $1 AND owner_id = $2`, [id, userId]);
       if (!rows[0]) throw new DiscussionError('not_found', '존재하지 않는 토론입니다');
-      return { discussion: rows[0], turns: await turnsOf(db, id) };
+      const projectId = rows[0].project_id;
+      if (!projectId) return { discussion: rows[0], turns: await turnsOf(db, id), project: null, refs: [] };
+      const project = await db.query<ProjectRef>(`SELECT id, name FROM projects WHERE id = $1 AND owner_id = $2`, [projectId, userId]);
+      return { discussion: rows[0], turns: await turnsOf(db, id), project: project.rows[0], refs: await refsOf(db, id) };
     },
 
     // docs/discussion-flow.md "공통 처리 순서"를 그대로 따른다

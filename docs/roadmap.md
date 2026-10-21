@@ -62,6 +62,12 @@
 - 처음 쓰는 사람의 관점에서 가입부터 연결·토론까지 안내 문구를 점검한 뒤 공개합니다.
 - **완료 조건:** 안내만 보고 연결과 토론을 마칠 수 있음.
 
+### 6. 프로젝트와 전역 배경
+
+- 토론 배경(2000자, `get_state`마다 전문 전송)으로는 긴 프로젝트 문서를 쓸 수 없어 프로젝트 단위를 둡니다. 프로젝트에는 전역 배경 항목(text 메모, link URL, file 로컬 절대경로)을 두고, 프로젝트 토론은 그중 일부를 참조합니다. 링크·파일은 참여 AI가 직접 읽고 서버는 내용을 가져오지 않습니다.
+- MCP 도구 `list_projects`·`get_project`·`get_background`·`add_background`·`update_background`, `start_discussion`의 `project_id`·`background_ids`, `get_state`·`get_summary`의 `references`. 웹 프로젝트·배경 화면과 내보내기. 소프트 삭제와 정리 작업 단계.
+- **완료 조건:** 사용자 간 격리, 웹 생성 → MCP 항목 추가 → 프로젝트 토론 → `references`·`get_background`·지시문 흐름, A석·B석 양쪽 수정과 `revision_mismatch`, 길이·URL·경로·개수·종류 검증, 삭제·소프트 삭제·정리, 동시 요청에서 개수·5MB 한도 유지, 계정·운영자 화면의 같은 용량 값(`test/projects.test.ts`).
+
 ### 후순위 (필요 시)
 
 이메일 가입, 자동 새로고침, 쟁점 개수 추이, 최대 라운드 변경, 지시문 재발급, 읽기 전용 공유 링크, `resolved_issues`, Claude Code 사용자를 위한 훅 기반 자동 진행.
