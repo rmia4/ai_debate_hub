@@ -33,7 +33,8 @@ export const SERVER_INSTRUCTIONS = `ai-debate-hub는 두 AI 채팅이 한 주제
 2. 토론 ID를 알려 주지 않았으면 discussion_id 없이 get_state를 호출한다.
    - 진행 중인 토론이 여럿이라는 오류가 오면, 사용자가 말한 주제와 뜻이 맞는 토론이 목록에 하나뿐일 때 그 discussion_id로 다시 호출한다. 주제를 말하지 않았거나 맞는 토론이 없거나 여럿이면 목록을 보여 주고 사용자에게 고르게 한다.
    - 토론이 하나만 조회되어도 사용자가 말한 주제와 다르면 제출하지 말고 사용자에게 확인한다.
-3. get_state 응답의 rules를 이 토론의 규칙으로 따르고, guide 안내대로 submit한다.`;
+3. get_state 응답의 rules를 이 토론의 규칙으로 따르고, guide 안내대로 submit한다.
+지난 토론의 결과를 묻는 등 토론 ID를 모를 때는 list_discussions로 목록을 보고, 주제가 맞는 토론의 discussion_id로 get_summary를 부른다.`;
 
 // 웹 화면의 복사용 한 줄. 지시문 전체는 서버가 get_state로 전달한다.
 export const joinMessage = (d: Pick<Discussion, 'id'>, me: Participant) => `토론 ${d.id}에 ${PARTICIPANT_NAME[me]}으로 참여해`;
