@@ -13,7 +13,7 @@
 | 참여자별 지시문([client-setup.md](client-setup.md#ai용-초기-지시문) 문구). 웹 생성과 `start_discussion`이 같이 씀 | [`instructions.ts`](../src/instructions.ts) |
 | 생성·종료·삭제·사용량. 웹과 MCP가 같은 `discussionsFor(...).create` 한도 검사를 씀 | [`discussions.ts`](../src/db/discussions.ts) |
 | 정리 작업과 실행 기록(`cleanup_runs`) | [`cleanup.ts`](../src/db/cleanup.ts), `GET /cron/cleanup` |
-| 보안 헤더(CSP 등), 복사 버튼 스크립트(`/static/app.js`) | [`app.ts`](../src/app.ts), [`html.ts`](../src/web/html.ts) |
+| 보안 헤더(CSP 등), 복사 버튼 스크립트(`/static/app.js`) | [`create-app.ts`](../src/create-app.ts), [`html.ts`](../src/web/html.ts) |
 
 - CSP는 `script-src 'self'`로 인라인 스크립트를 막습니다. 동의 제출 뒤 클라이언트 콜백으로 가는 리디렉트를 막지 않도록 `form-action`은 두지 않았습니다.
 - 생성 직후 상세 화면(`/app/d/:id?created=1`)에 지시문과 복사 버튼을 보여 줍니다. 진행 중인 토론의 상세 화면에서는 언제든 다시 볼 수 있습니다.
