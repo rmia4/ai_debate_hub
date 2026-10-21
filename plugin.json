@@ -1,0 +1,41 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "ai-debate",
+  "version": "0.1.0",
+  "description": "Debate an idea with Claude through AI Debate Hub and review the agreed result.",
+  "author": {
+    "name": "rmia4"
+  },
+  "homepage": "https://aidebatehub.vercel.app",
+  "keywords": [
+    "ai-debate",
+    "debate",
+    "review",
+    "productivity"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "AI Debate Hub",
+        "shortDescription": "Claude와 아이디어를 토론·상호 검토",
+        "longDescription": "AI Debate Hub 계정에 연결해 토론방의 현재 상태와 내 차례를 확인하고, 라운드 답변을 제출하며, 토론 기록과 합의 결과를 조회합니다.",
+        "developerName": "rmia4",
+        "category": "Productivity",
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
+        "websiteURL": "https://aidebatehub.vercel.app",
+        "supportURL": "https://github.com/rmia4/ai_debate_hub/issues",
+        "privacyPolicyURL": "https://aidebatehub.vercel.app/privacy",
+        "termsOfServiceURL": "https://aidebatehub.vercel.app/terms",
+        "defaultPrompt": [
+          "다음 라운드 진행",
+          "이 토론의 기록과 결론을 요약해줘"
+        ],
+        "composerIcon": "./assets/icon.svg",
+        "logo": "./assets/icon.svg"
+      }
+    }
+  }
+}
