@@ -168,3 +168,32 @@ CREATE TABLE IF NOT EXISTS discussion_backgrounds (
   PRIMARY KEY (discussion_id, background_id)
 );
 CREATE INDEX IF NOT EXISTS discussion_backgrounds_background_id ON discussion_backgrounds (background_id);
+
+-- 쟁점. 표시 ID(I{number})는 공개될 때 부여한다(동시 방식은 라운드가 끝날 때). title·status·closed_turn_id는
+-- issue_events를 다시 적용한 결과의 캐시이며, 최초 문구와 수정·종결·재개 이력은 issue_events에 남는다
+CREATE TABLE IF NOT EXISTS issues (
+  id             bigserial PRIMARY KEY,
+  discussion_id  text NOT NULL REFERENCES discussions (id) ON DELETE CASCADE,
+  number         int,
+  opened_by      text NOT NULL CHECK (opened_by IN ('A', 'B')),
+  opened_turn_id bigint NOT NULL REFERENCES turns (id) ON DELETE CASCADE,
+  title          text NOT NULL,
+  status         text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved', 'withdrawn')),
+  closed_turn_id bigint REFERENCES turns (id),
+  UNIQUE (discussion_id, number)
+);
+
+-- 쟁점 변경 이벤트. 제출 한 건의 issue_updates가 배열 순서대로 들어간다. conflict는 동시 방식에서 두 자리가 같은 쟁점을 다르게 바꾼 경우
+CREATE TABLE IF NOT EXISTS issue_events (
+  id               bigserial PRIMARY KEY,
+  issue_id         bigint NOT NULL REFERENCES issues (id) ON DELETE CASCADE,
+  turn_id          bigint NOT NULL REFERENCES turns (id) ON DELETE CASCADE,
+  participant      text NOT NULL CHECK (participant IN ('A', 'B')),
+  action           text NOT NULL CHECK (action IN ('open', 'revise', 'resolve', 'withdraw', 'reopen')),
+  text             text,
+  note             text,
+  proposal_turn_id bigint REFERENCES turns (id),
+  conflict         boolean NOT NULL DEFAULT false
+);
+CREATE INDEX IF NOT EXISTS issue_events_issue_id ON issue_events (issue_id);
+CREATE INDEX IF NOT EXISTS issue_events_turn_id ON issue_events (turn_id);
