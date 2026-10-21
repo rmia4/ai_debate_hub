@@ -163,7 +163,7 @@ describe('토론 화면', () => {
     const text = await md.text();
     expect(text).toContain('## 결론');
     expect(text).toContain('**최종안** 내용');
-    expect(text).toContain('남은 이견: 비용 미확정');
+    expect(text).toContain('구 형식 이견: 비용 미확정');
   });
 
   it('마지막 라운드에서 동의 대상이 엇갈린 채 끝나면 결론과 내보내기에 엇갈림을 표시한다', async () => {

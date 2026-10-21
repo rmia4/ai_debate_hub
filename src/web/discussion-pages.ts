@@ -16,11 +16,22 @@ import {
   type Reference,
   type Turn,
 } from '../db/discussions.js';
+import { getIssueLedger, type IssueChange, type IssueLedger } from '../db/issues.js';
 import { projectsFor, type Background } from '../db/projects.js';
 import { deleteUser } from '../db/users.js';
 import { crossingText, instructionFor, joinMessage, PARTICIPANT_NAME } from '../instructions.js';
 import { appNav, csrfField, esc, page } from './html.js';
-import { discussionMarkdown, KIND_LABEL, MODE_LABEL, projectMarkdown, renderMarkdown, STATUS_LABEL } from './markdown.js';
+import {
+  discussionMarkdown,
+  issueChangeFlags,
+  issueChangeText,
+  issueLineText,
+  KIND_LABEL,
+  MODE_LABEL,
+  projectMarkdown,
+  renderMarkdown,
+  STATUS_LABEL,
+} from './markdown.js';
 import { checkCsrf, endSession } from './session.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -45,21 +56,29 @@ const deleteGuide = `<p class="warn">보관 한도(${CREATE_LIMITS.stored}개·$
 const roundsLabel = (d: Discussion) =>
   d.mode === 'parallel' ? `라운드 ${d.current_round}/${d.max_rounds}` : `턴 ${d.current_round}/${d.max_rounds}`;
 
-function turnBox(t: Turn, d: Discussion) {
+// 쟁점 변경 한 줄. 반영 제안은 그 답변으로 가는 링크, 대기·충돌은 배지로 구분한다. 이월(미언급)은 표시하지 않는다
+function issueChangeItem(c: IssueChange) {
+  const link = c.proposal_turn_id ? ` · 반영 제안 <a href="#t${esc(c.proposal_turn_id)}">#${esc(c.proposal_turn_id)}</a>` : '';
+  const badges = issueChangeFlags(c).map((f) => ` <span class="badge">${f}</span>`).join('');
+  return `<li>${esc(issueChangeText(c))}${link}${badges}</li>`;
+}
+
+function turnBox(t: Turn, d: Discussion, changes: IssueChange[] = []) {
   const badges = [
     t.agreement ? `<span class="badge">${esc(t.agreement)}${t.accepted_proposal_id ? ` → #${esc(t.accepted_proposal_id)}` : ''}</span>` : '',
     t.sign ? '<span class="badge ok">사인</span>' : '',
     d.agreed_proposal_id === t.id ? '<span class="badge ok">합의된 안</span>' : '',
   ].join(' ');
   const app = t.client_name ? ` <small>${esc(t.client_name)}</small>` : '';
-  return `<div class="turn"><p><b>${PARTICIPANT_NAME[t.participant]}</b>${app} <small>#${esc(t.id)} · ${formatTime(t.created_at)}</small> ${badges}</p>
+  return `<div class="turn" id="t${esc(t.id)}"><p><b>${PARTICIPANT_NAME[t.participant]}</b>${app} <small>#${esc(t.id)} · ${formatTime(t.created_at)}</small> ${badges}</p>
     ${renderMarkdown(t.content)}
     ${t.proposal ? `<p><b>제안 #${esc(t.id)}</b></p>${renderMarkdown(t.proposal)}` : ''}
-    ${t.open_issues.length ? `<p>남은 이견</p><ul>${t.open_issues.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div>`;
+    ${changes.length ? `<p>쟁점 변경</p><ul>${changes.map(issueChangeItem).join('')}</ul>` : ''}
+    ${t.open_issues.length ? `<p>구 형식 이견</p><ul>${t.open_issues.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div>`;
 }
 
 // 동시: 라운드별 2열 비교. 웹은 진행 중 라운드의 제출도 보여 준다.
-function parallelRecord(d: Discussion, turns: Turn[]) {
+function parallelRecord(d: Discussion, turns: Turn[], ledger: IssueLedger) {
   const lastRound = Math.max(d.current_round, ...turns.map((t) => t.round));
   const rows: string[] = [];
   for (let r = 1; r <= lastRound; r++) {
@@ -69,7 +88,7 @@ function parallelRecord(d: Discussion, turns: Turn[]) {
     const agreed = d.status === 'agreed' && r === d.current_round;
     const cell = (p: (typeof PARTICIPANTS)[number]) => {
       const t = inRound.find((x) => x.participant === p);
-      return t ? turnBox(t, d) : `<div class="turn"><b>${PARTICIPANT_NAME[p]}</b> <small>아직 제출 안 함</small></div>`;
+      return t ? turnBox(t, d, ledger.changesByTurn[t.id]) : `<div class="turn"><b>${PARTICIPANT_NAME[p]}</b> <small>아직 제출 안 함</small></div>`;
     };
     rows.push(`<h3>라운드 ${r}${ongoing ? ' <span class="badge">진행 중</span>' : ''}${agreed ? ' <span class="badge ok">합의</span>' : ''}</h3>
       <div class="cols">${PARTICIPANTS.map(cell).join('')}</div>`);
@@ -78,22 +97,30 @@ function parallelRecord(d: Discussion, turns: Turn[]) {
 }
 
 // 순차: 대화형 타임라인과 다음 차례
-function sequentialRecord(d: Discussion, turns: Turn[]) {
-  const timeline = turns.map((t) => `<h3>턴 ${t.round}</h3>${turnBox(t, d)}`).join('');
+function sequentialRecord(d: Discussion, turns: Turn[], ledger: IssueLedger) {
+  const timeline = turns.map((t) => `<h3>턴 ${t.round}</h3>${turnBox(t, d, ledger.changesByTurn[t.id])}`).join('');
   if (d.status !== 'active') return timeline;
   const last = turns.at(-1);
   const next = last ? PARTICIPANT_NAME[last.participant === 'A' ? 'B' : 'A'] : '먼저 제출하는 쪽(선공)';
   return `${timeline}<p><span class="badge">다음 차례</span> 턴 ${d.current_round}: ${next}</p>`;
 }
 
-function issuesOf(turns: Turn[]) {
-  const items = PARTICIPANTS.map((p) => {
+// 쟁점 요약: 열린 쟁점과 종결된 쟁점(종결 턴·근거). 종료된 토론에서 열린 채 남은 쟁점은 미종결로 표시한다.
+// 쟁점 ID가 없는 구 형식 이견(open_issues)은 자리별 마지막 제출의 것만 따로 보여 준다.
+function issuesOf(d: Discussion, turns: Turn[], ledger: IssueLedger) {
+  const list = (title: string, items: IssueLedger['issues']) =>
+    items.length ? `<h3>${title}</h3><ul>${items.map((i) => `<li>${esc(issueLineText(d, i))}</li>`).join('')}</ul>` : '';
+  const legacy = PARTICIPANTS.map((p) => {
     const last = turns.findLast((t) => t.participant === p);
     return last?.open_issues.length
       ? `<li><b>${PARTICIPANT_NAME[p]}</b> (#${esc(last.id)}): <ul>${last.open_issues.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></li>`
       : '';
   }).join('');
-  return items ? `<ul>${items}</ul>` : '<p>남은 이견이 없습니다.</p>';
+  const html =
+    list('열린 쟁점', ledger.issues.filter((i) => i.status === 'open')) +
+    list('종결된 쟁점', ledger.issues.filter((i) => i.status !== 'open')) +
+    (legacy ? `<h3>구 형식 이견</h3><ul>${legacy}</ul>` : '');
+  return html || '<p>남은 쟁점이 없습니다.</p>';
 }
 
 function conclusionOf(d: Discussion, turns: Turn[]) {
@@ -292,11 +319,11 @@ export function discussionPagesRouter(config: Config, db: Db) {
   // 마크다운 내보내기. /app/d/:id보다 먼저 둔다.
   router.get('/app/d/:id.md', async (req, res, next) => {
     try {
-      const { discussion, turns, refs } = await discussionsFor(db, res.locals.web!.user.id).get(req.params.id);
+      const { discussion, turns, issueEvents, refs } = await discussionsFor(db, res.locals.web!.user.id).get(req.params.id);
       res
         .type('text/markdown; charset=utf-8')
         .attachment(`discussion-${discussion.id}.md`)
-        .send(discussionMarkdown(discussion, turns, refs));
+        .send(discussionMarkdown(discussion, turns, issueEvents, refs));
     } catch (e) {
       handle(res, next, e);
     }
@@ -305,7 +332,9 @@ export function discussionPagesRouter(config: Config, db: Db) {
   router.get('/app/d/:id', async (req, res, next) => {
     try {
       const web = res.locals.web!;
-      const { discussion: d, turns, project, refs } = await discussionsFor(db, web.user.id).get(req.params.id);
+      const snapshot = await discussionsFor(db, web.user.id).get(req.params.id);
+      const { discussion: d, turns, project, refs } = snapshot;
+      const ledger = getIssueLedger(snapshot, 'web');
       const ended = d.status !== 'active';
       const actions = ended
         ? `<form method="post" action="/app/d/${esc(d.id)}/delete">${csrfField(web.csrf)}
@@ -328,8 +357,8 @@ export function discussionPagesRouter(config: Config, db: Db) {
           ${d.context ? `<h2>배경</h2>${renderMarkdown(d.context)}` : ''}
           ${referencesSection(refs)}
           <h2>결론</h2>${conclusionOf(d, turns)}
-          <h2>쟁점</h2>${issuesOf(turns)}
-          <h2>기록</h2>${d.mode === 'parallel' ? parallelRecord(d, turns) : sequentialRecord(d, turns)}
+          <h2>쟁점</h2>${issuesOf(d, turns, ledger)}
+          <h2>기록</h2>${d.mode === 'parallel' ? parallelRecord(d, turns, ledger) : sequentialRecord(d, turns, ledger)}
           ${turns.length || ended ? '' : '<p>아직 제출이 없습니다.</p>'}
           <p><a href="/app/d/${esc(d.id)}.md">마크다운 내보내기</a></p>
           ${actions}
@@ -402,7 +431,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
       const [projects, all] = await Promise.all([projectsFor(db, userId).all(), discussionsFor(db, userId).all()]);
       const body = [
         ...projects.map(({ project, backgrounds }) => projectMarkdown(project, backgrounds)),
-        ...all.map(({ discussion, turns, refs }) => discussionMarkdown(discussion, turns, refs)),
+        ...all.map(({ discussion, turns, issueEvents, refs }) => discussionMarkdown(discussion, turns, issueEvents, refs)),
       ].join('\n---\n\n');
       res
         .type('text/markdown; charset=utf-8')

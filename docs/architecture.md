@@ -74,7 +74,7 @@ MCP 연결(OAuth 2.1) 설계는 [인증·보안](auth-security.md)에 있습니�
 ### 한도 계산과 동시 요청
 
 - 웹과 MCP의 토론 생성은 같은 저장소 함수를 사용합니다. 생성 트랜잭션에서 해당 `users` 행을 `SELECT … FOR UPDATE`로 잠근 뒤 진행 중 개수·보관 개수·텍스트 용량을 검사하고 생성합니다. 생성으로 5개·50개를 넘기거나 주제·배경 추가로 5MB를 넘기면 거부합니다.
-- 텍스트 용량은 토론의 `topic`·`context`, 모든 답변의 `content`·`proposal`·`open_issues` 문자열, 배경 항목의 제목·요약·본문·위치를 UTF-8로 인코딩한 바이트 수의 합계입니다. 소프트 삭제된 배경도 저장 공간을 쓰므로 셉니다. 계정 화면(`usageOf`)과 운영자 화면(`listUsersWithUsage`)은 같은 SQL 식(`usageBytesSql`)을 씁니다. 글자 수, DB 행·인덱스 용량, JSON 구분자 크기는 이 한도와 구분합니다.
+- 텍스트 용량은 토론의 `topic`·`context`, 모든 답변의 `content`·`proposal`·`open_issues` 문자열, 쟁점 이벤트의 `text`·`note`(캐시 `issues.title`은 중복이라 제외), 배경 항목의 제목·요약·본문·위치를 UTF-8로 인코딩한 바이트 수의 합계입니다. 소프트 삭제된 배경도 저장 공간을 쓰므로 셉니다. 계정 화면(`usageOf`)과 운영자 화면(`listUsersWithUsage`)은 같은 SQL 식(`usageBytesSql`)을 씁니다. 글자 수, DB 행·인덱스 용량, JSON 구분자 크기는 이 한도와 구분합니다.
 - 용량은 생성 시점에만 검사합니다. 이미 진행 중인 토론은 5MB를 넘어도 정해진 최대 라운드·턴까지 제출할 수 있습니다. 별도의 엄격한 제출별 용량 잠금은 두지 않습니다.
 - 한 토론의 제출은 동시 방식 최대 10라운드×2명, 순차 방식 최대 20턴으로 모두 최대 20건입니다. 제출 텍스트는 최대 `20 × (8,000 + 4,000 + 10 × 200) = 280,000자`이고 주제·배경은 별도입니다. 바이트 수는 문자에 따라 다릅니다. 이 초과 허용량은 진행 중 최대 5개에 누적될 수 있으므로 5MB는 사용자별 DB 사용량의 절대 상한이 아닙니다.
 - 프로젝트·배경을 쓰는 모든 작업(프로젝트 생성·수정·삭제, 배경 추가·수정·삭제)과 프로젝트 토론 생성은 트랜잭션 첫 단계에서 같은 `users` 행을 `FOR UPDATE`로 잠급니다. 그래서 개수 한도, 배경 저장 시점의 5MB 검사(`현재 용량 + 늘어나는 바이트`), "진행 중인 토론이 참조하면 삭제 거부" 검사가 서로 경쟁하지 않고, 잠금 순서가 하나라 교착도 없습니다. 배경 수정의 `revision` 검사도 이 잠금 안에서 합니다.
@@ -154,8 +154,17 @@ MCP 연결(OAuth 2.1) 설계는 [인증·보안](auth-security.md)에 있습니�
 | `agreement` | text | `agree` / `partial` / `disagree` |
 | `accepted_proposal_id` | bigint (FK → `turns.id`) | 동의한 합의안 (동시 방식) |
 | `sign` | boolean | 현재 합의안 수락 사인 (순차 방식) |
-| `open_issues` | jsonb | 남은 이견 배열 |
+| `open_issues` | jsonb | deprecated: 자유 문장 이견 배열. 기존 값 저장·'구 형식 이견' 표시만 하고 쟁점 ID는 만들지 않음 |
 | `created_at` | timestamptz | 제출 시각 |
+
+### 쟁점 테이블
+
+쟁점은 `submit.issue_updates`로만 바뀝니다. 원장 계산(`src/db/issues.ts`)은 DB에 접근하지 않는 순수 함수이고, 이벤트를 공개 순서(라운드·턴 → A→B → 제출 내 배열 순서)대로 다시 적용합니다.
+
+| 테이블 | 주요 컬럼 | 설명 |
+| --- | --- | --- |
+| `issues` | `id`, `discussion_id`, `number`(공개 시 부여, 표시 ID `I{number}`), `opened_by`, `opened_turn_id`, 캐시 `title`·`status`(`open`/`resolved`/`withdrawn`)·`closed_turn_id` | 캐시는 이벤트를 다시 적용한 결과. 동시 방식 진행 중 라운드에서 연 쟁점은 `number`가 NULL |
+| `issue_events` | `id`, `issue_id`, `turn_id`, `participant`, `action`(`open`/`revise`/`resolve`/`withdraw`/`reopen`), `text`, `note`, `proposal_turn_id`, `conflict` | 최초 문구와 수정·종결·재개 이력. 동시 방식에서 두 자리가 같은 쟁점을 다르게 바꾸면 양쪽 `conflict` |
 
 **제약:** `(discussion_id, round, participant)` 유니크 제약을 두 방식 공통으로 둡니다. 순차 방식의 "한 턴에 한 명" 제한은 토론방 행 잠금과 차례 검증으로 보장합니다. `(discussion_id, round)` 제약은 동시 방식의 두 번째 제출까지 막으므로 두지 않습니다.
 

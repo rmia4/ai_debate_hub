@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { Db, Queryable } from './db.js';
+import { ISSUE_ACTIONS, ISSUE_LIMITS, issueRef, replayIssues, type IssueEvent, type IssueStatus, type IssueUpdate } from './issues.js';
 import { hitRateLimit } from './rate-limit.js';
 
 export type Mode = 'parallel' | 'sequential';
@@ -75,7 +76,9 @@ export interface SubmitInput {
   expected_round: number;
   content: string;
   proposal?: string;
+  // deprecated: 자유 문장 이견. 저장·표시만 하고 쟁점 ID는 만들지 않는다
   open_issues: string[];
+  issue_updates?: IssueUpdate[];
   agreement?: Agreement;
   accepted_proposal_id?: string;
   sign?: boolean;
@@ -100,12 +103,15 @@ const DAY_SECONDS = 24 * 60 * 60;
 // 배경 항목 한 행의 바이트: 제목·요약·본문·위치. 소프트 삭제된 항목도 저장 공간을 쓰므로 센다
 const BACKGROUND_BYTES = `octet_length(b.title) + octet_length(b.summary) + octet_length(b.body) + coalesce(octet_length(b.location), 0)`;
 
-// 텍스트 용량: topic·context, 모든 답변의 content·proposal·open_issues 문자열, 배경 항목의 UTF-8 바이트 합.
+// 텍스트 용량: topic·context, 모든 답변의 content·proposal·open_issues 문자열, 쟁점 이벤트의 text·note, 배경 항목의 UTF-8 바이트 합.
+// 쟁점 캐시(issues.title)는 이벤트 문구와 겹치므로 세지 않는다.
 // owner는 사용자 ID를 가리키는 SQL 식($1 또는 u.id). usageOf와 운영자 화면(listUsersWithUsage)이 같은 식을 쓴다.
 export const usageBytesSql = (owner: string) => `((SELECT coalesce(sum(octet_length(topic) + octet_length(context)), 0) FROM discussions d WHERE d.owner_id = ${owner})
         + (SELECT coalesce(sum(octet_length(t.content) + coalesce(octet_length(t.proposal), 0)
              + (SELECT coalesce(sum(octet_length(x)), 0) FROM jsonb_array_elements_text(t.open_issues) x)), 0)
            FROM turns t JOIN discussions d ON d.id = t.discussion_id WHERE d.owner_id = ${owner})
+        + (SELECT coalesce(sum(coalesce(octet_length(e.text), 0) + coalesce(octet_length(e.note), 0)), 0)
+           FROM issue_events e JOIN issues i ON i.id = e.issue_id JOIN discussions d ON d.id = i.discussion_id WHERE d.owner_id = ${owner})
         + (SELECT coalesce(sum(${BACKGROUND_BYTES}), 0)
            FROM project_backgrounds b JOIN projects p ON p.id = b.project_id WHERE p.owner_id = ${owner}))::float8`;
 
@@ -135,6 +141,7 @@ export class DiscussionError extends Error {
       | 'not_your_turn'
       | 'opponent_started'
       | 'invalid_combination'
+      | 'invalid_issue'
       | 'not_ended'
       | 'revision_mismatch'
       | 'in_use',
@@ -151,6 +158,26 @@ const TURN_COLS = `id::text AS id, round, participant, client_name, content, pro
 
 const turnsOf = async (q: Queryable, discussionId: string) =>
   (await q.query<Turn>(`SELECT ${TURN_COLS} FROM turns WHERE discussion_id = $1 ORDER BY round, id`, [discussionId])).rows;
+
+const eventsOf = async (q: Queryable, discussionId: string) =>
+  (
+    await q.query<IssueEvent>(
+      `SELECT e.id::text AS id, e.issue_id::text AS issue_id, e.turn_id::text AS turn_id, e.participant, e.action, e.text, e.note,
+         e.proposal_turn_id::text AS proposal_turn_id
+       FROM issue_events e JOIN issues i ON i.id = e.issue_id WHERE i.discussion_id = $1 ORDER BY e.id`,
+      [discussionId],
+    )
+  ).rows;
+
+// 쟁점 캐시. number가 없으면 아직 공개되지 않은 쟁점이다
+interface IssueRow {
+  id: string;
+  number: number | null;
+  opened_by: Participant;
+  status: IssueStatus;
+}
+const issueRowsOf = async (q: Queryable, discussionId: string) =>
+  (await q.query<IssueRow>(`SELECT id::text AS id, number, opened_by, status FROM issues WHERE discussion_id = $1`, [discussionId])).rows;
 
 const refsOf = async (q: Queryable, discussionId: string) =>
   (
@@ -223,6 +250,13 @@ function normalize(mode: Mode, input: SubmitInput) {
     content: input.content,
     proposal: input.proposal ?? null,
     open_issues: input.open_issues,
+    issue_updates: (input.issue_updates ?? []).map((u) => ({
+      action: u.action,
+      id: u.id ?? null,
+      text: u.text ?? null,
+      note: u.note ?? null,
+      proposal_ref: u.proposal_ref ?? null,
+    })),
     agreement: mode === 'parallel' ? (input.agreement ?? null) : null,
     accepted_proposal_id: mode === 'parallel' ? (input.accepted_proposal_id ?? null) : null,
     sign: mode === 'sequential' ? (input.sign ?? false) : null,
@@ -230,15 +264,121 @@ function normalize(mode: Mode, input: SubmitInput) {
 }
 type TurnValues = ReturnType<typeof normalize>;
 
-const sameSubmission = (t: Turn, v: TurnValues) =>
+// 저장된 이벤트를 normalize의 issue_updates 모양으로 되돌린다(재시도 비교용)
+const savedUpdates = (t: Turn, events: IssueEvent[], issues: IssueRow[]): TurnValues['issue_updates'] =>
+  events
+    .filter((e) => e.turn_id === t.id)
+    .map((e) => ({
+      action: e.action,
+      id: e.action === 'open' ? null : issueRef(issues.find((i) => i.id === e.issue_id)!.number!),
+      text: e.text,
+      note: e.note,
+      proposal_ref: e.proposal_turn_id === t.id ? 'this' : e.proposal_turn_id,
+    }));
+
+const sameSubmission = (t: Turn, v: TurnValues, updates: TurnValues['issue_updates']) =>
   t.content === v.content &&
   t.proposal === v.proposal &&
   JSON.stringify(t.open_issues) === JSON.stringify(v.open_issues) &&
+  JSON.stringify(updates) === JSON.stringify(v.issue_updates) &&
   t.agreement === v.agreement &&
   t.accepted_proposal_id === v.accepted_proposal_id &&
   t.sign === v.sign;
 
 const invalid = (message: string) => new DiscussionError('invalid_combination', message);
+const invalidIssue = (message: string) => new DiscussionError('invalid_issue', message);
+
+// 공개된 쟁점(동시 방식은 라운드 시작 시점)과 공개된 proposal만 기준으로 검사한다. 비공개 쟁점은 번호가 없어 참조할 수 없으므로
+// 오류 문구로 상대의 대기 중 변경이 드러나지 않는다. closingOnly는 agree·sign=true 제출(resolve·withdraw만 허용)
+function validateIssueUpdates(
+  input: SubmitInput,
+  me: Participant,
+  published: IssueRow[],
+  publicProposals: Set<string>,
+  closingOnly: string | null,
+) {
+  const updates = input.issue_updates ?? [];
+  if (updates.length && input.open_issues.length) throw invalid('open_issues와 issue_updates는 함께 쓸 수 없습니다. issue_updates를 쓰세요');
+  if (updates.length > ISSUE_LIMITS.updates) throw invalidIssue(`issue_updates는 ${ISSUE_LIMITS.updates}개까지입니다`);
+  const seen = new Set<string>();
+  return updates.map((u, i) => {
+    const at = `issue_updates[${i}]`;
+    if (!ISSUE_ACTIONS.includes(u.action)) throw invalidIssue(`${at}: action은 ${ISSUE_ACTIONS.join('·')} 중 하나입니다`);
+    if (closingOnly && u.action !== 'resolve' && u.action !== 'withdraw') {
+      throw invalidIssue(`${closingOnly} 제출의 issue_updates에는 resolve·withdraw만 쓸 수 있습니다`);
+    }
+    const withText = u.action === 'open' || u.action === 'revise';
+    if (withText !== (u.text !== undefined)) throw invalidIssue(`${at}: text는 open·revise에만 쓰고 그때는 필수입니다`);
+    if (u.text !== undefined && !(u.text.trim() && u.text.length <= ISSUE_LIMITS.text)) throw invalidIssue(`${at}: text는 1~${ISSUE_LIMITS.text}자입니다`);
+    if ((u.action === 'open') !== (u.note === undefined)) throw invalidIssue(`${at}: note는 open 외의 변경에 필수이고 open에는 쓰지 않습니다`);
+    if (u.note !== undefined && !(u.note.trim() && u.note.length <= ISSUE_LIMITS.note)) throw invalidIssue(`${at}: note는 1~${ISSUE_LIMITS.note}자입니다`);
+    if (u.proposal_ref === 'this' ? input.proposal === undefined : u.proposal_ref !== undefined && !publicProposals.has(u.proposal_ref)) {
+      throw invalidIssue(`${at}: proposal_ref는 공개된 proposal 답변 ID이거나, 이번 제출에 proposal이 있을 때 "this"입니다`);
+    }
+    if (u.action === 'open') {
+      if (u.id !== undefined) throw invalidIssue(`${at}: open에는 id를 쓰지 않습니다`);
+      return { ...u, issue: null };
+    }
+    const issue = published.find((x) => issueRef(x.number!) === u.id);
+    if (!issue) throw invalidIssue(`${at}: 없는 쟁점입니다(${u.id ?? 'id 없음'}). get_state의 issues에서 ID를 확인하세요`);
+    if (seen.has(issue.id)) throw invalidIssue(`${at}: 한 제출에서 같은 쟁점(${u.id})을 두 번 바꿀 수 없습니다`);
+    seen.add(issue.id);
+    if ((u.action === 'reopen') === (issue.status === 'open')) {
+      throw invalidIssue(`${at}: ${u.id}는 ${issue.status} 상태라 ${u.action}할 수 없습니다`);
+    }
+    if (u.action === 'withdraw' && issue.opened_by !== me) throw invalidIssue(`${at}: withdraw는 쟁점을 연 쪽만 할 수 있습니다`);
+    return { ...u, issue };
+  });
+}
+type CheckedUpdate = ReturnType<typeof validateIssueUpdates>[number];
+
+// 비차단 안내. 공개 스냅샷에 이번 제출의 변경만 더해 계산한다(동시 방식은 상대의 대기 중 변경을 넣지 않는다)
+export interface SubmitWarning {
+  code: 'open_issues_remain';
+  message: string;
+  issues: string[];
+  basis_round?: number;
+  basis_turn?: number;
+}
+
+function issueWarnings(d: Discussion, published: IssueRow[], updates: CheckedUpdate[], closing: boolean): SubmitWarning[] {
+  if (!closing) return [];
+  const closed = new Set(updates.filter((u) => u.action === 'resolve' || u.action === 'withdraw').map((u) => u.issue!.id));
+  const open = published.filter((x) => x.status === 'open' && !closed.has(x.id)).sort((a, b) => a.number! - b.number!);
+  if (!open.length) return [];
+  const issues = open.map((x) => issueRef(x.number!));
+  return [
+    {
+      code: 'open_issues_remain',
+      message: `열린 쟁점 ${issues.join(', ')}이(가) 남은 채 동의합니다. 합의를 막지는 않지만 종료 기록에 미종결로 남습니다`,
+      issues,
+      ...(d.mode === 'parallel' ? { basis_round: d.current_round - 1 } : { basis_turn: d.current_round }),
+    },
+  ];
+}
+
+// 공개된 이벤트를 다시 적용한 결과로 쟁점 캐시(번호·문구·상태·종결 턴)와 충돌 표시를 맞춘다. 대기 이벤트는 건드리지 않는다
+async function syncIssues(q: Queryable, d: Discussion, turns: Turn[]) {
+  const r = replayIssues(d, turns, await eventsOf(q, d.id));
+  if (!r.issues.length) return;
+  await q.query(
+    `UPDATE issues i SET number = v.number, title = v.title, status = v.status, closed_turn_id = v.closed_turn_id
+     FROM unnest($2::bigint[], $3::int[], $4::text[], $5::text[], $6::bigint[]) AS v(id, number, title, status, closed_turn_id)
+     WHERE i.id = v.id AND i.discussion_id = $1`,
+    [
+      d.id,
+      r.issues.map((s) => s.id),
+      r.issues.map((s) => s.number),
+      r.issues.map((s) => s.title),
+      r.issues.map((s) => s.status),
+      r.issues.map((s) => s.closed_turn_id),
+    ],
+  );
+  await q.query(
+    `UPDATE issue_events SET conflict = (id = ANY($2::bigint[])) WHERE issue_id IN (SELECT id FROM issues WHERE discussion_id = $1)`,
+    [d.id, [...r.conflicts]],
+  );
+}
 
 function validateParallel(d: Discussion, turns: Turn[], input: SubmitInput) {
   if (input.sign !== undefined) throw invalid('동시 방식은 sign을 받지 않습니다. agreement를 쓰세요');
@@ -305,6 +445,8 @@ export interface SubmitResult {
   turn: Turn;
   discussion: Discussion;
   turns: Turn[];
+  issueEvents: IssueEvent[];
+  warnings: SubmitWarning[];
 }
 
 // 토론 데이터 접근은 이 함수가 돌려주는 메서드로만 한다. 모든 쿼리에 owner_id 조건이 붙는다.
@@ -379,15 +521,20 @@ export function discussionsFor(db: Db, userId: string) {
 
     usage: () => usageOf(db, userId),
 
-    // 계정 내보내기용: 모든 토론과 답변, 참조 배경
-    async all(): Promise<{ discussion: Discussion; turns: Turn[]; refs: Reference[] }[]> {
+    // 계정 내보내기용: 모든 토론과 답변, 쟁점 이벤트, 참조 배경
+    async all(): Promise<{ discussion: Discussion; turns: Turn[]; issueEvents: IssueEvent[]; refs: Reference[] }[]> {
       const list = await this.list();
       return Promise.all(
-        list.map(async (discussion) => ({ discussion, turns: await turnsOf(db, discussion.id), refs: await refsOf(db, discussion.id) })),
+        list.map(async (discussion) => ({
+          discussion,
+          turns: await turnsOf(db, discussion.id),
+          issueEvents: await eventsOf(db, discussion.id),
+          refs: await refsOf(db, discussion.id),
+        })),
       );
     },
 
-    // 진행 중인 토론을 수동 종료한다
+    // 진행 중인 토론을 수동 종료한다. 동시 방식 진행 중 라운드의 쟁점 변경은 있는 제출만 같은 트랜잭션에서 공개한다
     async close(id: string): Promise<Discussion> {
       return db.tx(async (q) => {
         const d = await lockOwned(q, id);
@@ -397,6 +544,7 @@ export function discussionsFor(db: Db, userId: string) {
            WHERE id = $1 AND owner_id = $2 RETURNING ${DISCUSSION_COLS}`,
           [id, userId],
         );
+        await syncIssues(q, rows[0], await turnsOf(q, id));
         return rows[0];
       });
     },
@@ -410,14 +558,21 @@ export function discussionsFor(db: Db, userId: string) {
       });
     },
 
-    // project는 프로젝트 토론일 때만 채운다
-    async get(id: string): Promise<{ discussion: Discussion; turns: Turn[]; project: ProjectRef | null; refs: Reference[] }> {
+    // project는 프로젝트 토론일 때만 채운다. issueEvents는 getIssueLedger에 넘겨 viewer별 원장을 만든다
+    async get(id: string): Promise<{
+      discussion: Discussion;
+      turns: Turn[];
+      issueEvents: IssueEvent[];
+      project: ProjectRef | null;
+      refs: Reference[];
+    }> {
       const { rows } = await db.query<Discussion>(`SELECT ${DISCUSSION_COLS} FROM discussions WHERE id = $1 AND owner_id = $2`, [id, userId]);
       if (!rows[0]) throw new DiscussionError('not_found', '존재하지 않는 토론입니다');
+      const base = { discussion: rows[0], turns: await turnsOf(db, id), issueEvents: await eventsOf(db, id) };
       const projectId = rows[0].project_id;
-      if (!projectId) return { discussion: rows[0], turns: await turnsOf(db, id), project: null, refs: [] };
+      if (!projectId) return { ...base, project: null, refs: [] };
       const project = await db.query<ProjectRef>(`SELECT id, name FROM projects WHERE id = $1 AND owner_id = $2`, [projectId, userId]);
-      return { discussion: rows[0], turns: await turnsOf(db, id), project: project.rows[0], refs: await refsOf(db, id) };
+      return { ...base, project: project.rows[0], refs: await refsOf(db, id) };
     },
 
     // docs/discussion-flow.md "공통 처리 순서"를 그대로 따른다
@@ -429,18 +584,30 @@ export function discussionsFor(db: Db, userId: string) {
           `SELECT ${TURN_COLS} FROM turns WHERE discussion_id = $1 AND round = $2 AND participant = $3`,
           [id, input.expected_round, me],
         );
+        const issueRows = await issueRowsOf(q, id);
         if (existing[0]) {
+          const issueEvents = await eventsOf(q, id);
           return {
-            outcome: sameSubmission(existing[0], values) ? 'retry' : 'conflict',
+            outcome: sameSubmission(existing[0], values, savedUpdates(existing[0], issueEvents, issueRows)) ? 'retry' : 'conflict',
             turn: existing[0],
             discussion: d,
             turns: await turnsOf(q, id),
+            issueEvents,
+            warnings: [],
           };
         }
         if (d.status !== 'active') throw new DiscussionError('ended', '종료된 토론입니다');
         const turns = await turnsOf(q, id);
         if (d.mode === 'parallel') validateParallel(d, turns, input);
         else validateSequential(d, turns, me, input);
+        // 동시 방식은 진행 중 라운드가 공개되지 않으므로 캐시의 공개 쟁점이 곧 라운드 시작 스냅샷이다
+        const published = issueRows.filter((x) => x.number !== null);
+        const publicProposals = new Set(
+          turns.filter((t) => t.proposal !== null && (d.mode === 'sequential' || t.round < d.current_round)).map((t) => t.id),
+        );
+        const closing = d.mode === 'parallel' ? (input.agreement === 'agree' ? 'agree' : null) : input.sign ? 'sign=true' : null;
+        const updates = validateIssueUpdates(input, me, published, publicProposals, closing);
+        const warnings = issueWarnings(d, published, updates, closing !== null);
 
         const { rows: inserted } = await q.query<Turn>(
           `INSERT INTO turns (discussion_id, round, participant, client_name, content, proposal, agreement, accepted_proposal_id, sign, open_issues)
@@ -448,6 +615,20 @@ export function discussionsFor(db: Db, userId: string) {
           [id, d.current_round, me, clientName, values.content, values.proposal, values.agreement, values.accepted_proposal_id, values.sign, JSON.stringify(values.open_issues)],
         );
         const saved = inserted[0];
+        for (const u of updates) {
+          const issueId =
+            u.issue?.id ??
+            (
+              await q.query<{ id: string }>(
+                `INSERT INTO issues (discussion_id, opened_by, opened_turn_id, title) VALUES ($1, $2, $3, $4) RETURNING id::text AS id`,
+                [id, me, saved.id, u.text],
+              )
+            ).rows[0].id;
+          await q.query(
+            `INSERT INTO issue_events (issue_id, turn_id, participant, action, text, note, proposal_turn_id) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [issueId, saved.id, me, u.action, u.text ?? null, u.note ?? null, u.proposal_ref === 'this' ? saved.id : (u.proposal_ref ?? null)],
+          );
+        }
         const next = nextState(d, turns, saved, me);
         const starter = d.mode === 'sequential' && !d.starter ? me : d.starter;
         if (next || starter !== d.starter) {
@@ -460,7 +641,17 @@ export function discussionsFor(db: Db, userId: string) {
           );
           d = rows[0];
         }
-        return { outcome: 'accepted', turn: saved, discussion: d, turns: [...turns, saved] };
+        // 순차 방식은 제출마다, 동시 방식은 라운드가 끝날 때(다음 라운드·합의·최대 도달) 쟁점 변경을 공개한다. 둘 다 next가 있을 때다
+        const all = [...turns, saved];
+        if (next) await syncIssues(q, d, all);
+        return {
+          outcome: 'accepted',
+          turn: saved,
+          discussion: d,
+          turns: all,
+          issueEvents: await eventsOf(q, id),
+          warnings,
+        };
       });
     },
   };
