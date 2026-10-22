@@ -5,7 +5,7 @@ import { listConnections, revokeConnection } from '../oauth/connections.js';
 import { loginUrl } from './auth-routes.js';
 import { discussionPagesRouter } from './discussion-pages.js';
 import { projectPagesRouter } from './project-pages.js';
-import { appNav, esc, logoutForm, page, suspendedPage } from './html.js';
+import { appNav, esc, page, settingsPage, suspendedPage } from './html.js';
 import { checkCsrf, loadSession, type WebSession } from './session.js';
 
 // Codex 플러그인 마켓플레이스 값. 플러그인 패키지는 이 저장소의 CODEX_PLUGIN_REF 브랜치에 둔다.
@@ -23,6 +23,29 @@ const claudeConnectUrl = (resource: string) =>
     connectorUrl: resource,
   })}`;
 
+// 첫 화면 전용 배치: 위쪽 2열(소개·토론 예시), 소개 3칸, 사용 방법·진행 방식 2열
+const HOME_STYLE = `
+.split,.about,.rows{max-width:68rem;margin:0 auto;padding:0 2rem}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:2.5rem;align-items:center;padding-top:3rem;padding-bottom:1.5rem}
+.lead{font-size:1.08rem}
+.kv{display:flex;align-items:center;gap:.5rem;font-family:var(--mono);font-size:.82rem;background:var(--panel);border:1px solid var(--line);padding:.45rem .6rem}
+.kv b{font-family:system-ui,sans-serif;font-weight:600;color:var(--mute);flex:none}.kv span{flex:1;word-break:break-all}.kv button{font-size:.75rem;min-height:36px;padding:.2rem .7rem}
+.win{background:var(--panel);border:1px solid var(--line)}
+.win-h{display:flex;gap:.4rem;align-items:center;padding:.45rem .7rem;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:.75rem;color:var(--mute)}
+.win-h i{width:.6rem;height:.6rem;border-radius:50%;border:1px solid var(--line)}.win-h span{margin-left:.5rem}
+.log{padding:.8rem 1rem;font-size:.88rem}.log .ln{padding:.4rem 0;border-bottom:1px dashed var(--line)}.log .ln:last-child{border:0}
+.log .a,.log .b{font-family:var(--mono);font-size:.8rem;font-weight:700;margin-right:.4rem}.log .a{color:var(--acc)}.log .b{color:var(--b)}
+.about{display:grid;grid-template-columns:repeat(3,1fr);gap:1.4rem;padding-top:1rem;padding-bottom:1rem}
+.box{background:var(--panel);border:1px solid var(--line);padding:1.5rem 1.1rem 1.1rem;position:relative;margin-top:.8rem}
+.box>.lbl{position:absolute;top:-.75rem;left:.7rem;background:var(--bg);padding:0 .4rem;font-family:var(--mono);font-size:.82rem;color:var(--acc);font-weight:600}
+.box p{margin:0}.box+.box{margin-top:1.4rem}.about .box+.box{margin-top:.8rem}
+.rows{display:grid;grid-template-columns:1.2fr 1fr;gap:2rem;padding-bottom:2.5rem}
+.steps{list-style:none;margin:0;padding:0;counter-reset:s;background:var(--panel);border:1px solid var(--line)}
+.steps li{counter-increment:s;display:flex;gap:1rem;padding:.55rem .9rem;border-bottom:1px solid var(--line)}.steps li:last-child{border:0}
+.steps li::before{content:counter(s,decimal-leading-zero);font-family:var(--mono);color:var(--acc);flex:none}
+@media (max-width:900px){.about{grid-template-columns:1fr}}
+@media (max-width:760px){.split,.rows{grid-template-columns:1fr}.split,.about,.rows{padding-left:1rem;padding-right:1rem}.split{padding-top:1.5rem}}`;
+
 const formatTime = (d: Date | null) =>
   d ? new Date(d).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'medium', timeStyle: 'short' }) : '없음';
 
@@ -39,26 +62,60 @@ export function pagesRouter(config: Config, db: Db) {
   router.get('/', async (req, res, next) => {
     try {
       const web = await loadSession(config, db, req);
+      const cta = web
+        ? '<a class="btn fill" href="/app">내 토론으로</a>'
+        : '<a class="btn fill" href="/login">GitHub 또는 Google로 로그인</a>';
       res.send(
         page(
           'AI Debate Hub',
-          `<p>내 AI(Claude, Codex 등)를 같은 서버에 연결해, 하나의 아이디어를 두 AI 채팅이 토론·상호 검토하게 하는 무료 서비스입니다. 서로 다른 AI도, 같은 AI의 두 채팅도 토론할 수 있습니다.
-          두 AI 사이에서 답변을 복사해 옮길 필요 없이, 서버가 기록·차례·합의 판정을 맡습니다.</p>
-          <h2>사용 방법</h2>
-          <ol>
-            <li>GitHub 또는 Google로 로그인합니다.</li>
-            <li>연결 설정 화면에서 쓸 AI를 연결합니다(MCP 주소 <code>${esc(config.resource)}</code>).</li>
-            <li>웹에서 토론방을 만들고, 두 채팅에 A석·B석 참여 문구를 하나씩 입력합니다.</li>
-            <li>각 채팅에 "다음 라운드 진행"을 입력하며 토론을 이어 갑니다.</li>
-            <li>합의되거나 최대 라운드에 도달하면 끝나고, 결과는 웹에서 확인·내보내기합니다.</li>
-          </ol>
-          <h2>진행 방식</h2>
-          <ul>
-            <li><b>동시</b>: 매 라운드 양쪽이 서로의 답을 보지 않고 한 번씩 답변합니다. 같은 합의안에 양쪽이 동의하면 합의입니다.</li>
-            <li><b>순차</b>: 한 턴씩 번갈아 답변합니다. 상대 사인 뒤 제안자가 다시 사인하면 합의입니다.</li>
-          </ul>
-          <p>AI 사용료는 각자의 AI 구독에서 나갑니다. 기밀이나 개인정보는 넣지 마세요.</p>
-          <p>${web ? '<a class="btn" href="/app">내 토론으로</a>' : '<a class="btn" href="/login">로그인</a>'}</p>`,
+          `<header class="topbar"><a class="brand" href="/">ai-debate-hub</a>${
+            web ? appNav(web) : '<nav><a href="/login">로그인</a></nav>'
+          }</header>
+          <main>
+            <section class="split">
+              <div>
+                <h1>두 AI 채팅이 토론해 합의안을 만듭니다</h1>
+                <p class="lead">Claude와 Codex처럼 서로 다른 AI, 또는 같은 AI의 두 채팅이 한 주제를 놓고 의견을 주고받고 서로 검토합니다.</p>
+                <p>${cta}</p>
+                <div class="kv"><b>MCP 주소</b><span id="mcp-url">${esc(config.resource)}</span><button type="button" data-copy="mcp-url">복사</button></div>
+                <p id="copy-error" class="warn" hidden>복사하지 못했습니다. 주소를 직접 선택해 복사해 주세요.</p>
+              </div>
+              <div class="win" role="img" aria-label="토론 예시">
+                <div class="win-h"><i></i><i></i><i></i><span>토론 #42 · 동시 · 라운드 3/5</span></div>
+                <div class="log">
+                  <div class="ln"><span class="a">A석 · Claude</span>TTL 30초에 쓰기 시 즉시 무효화를 더하자고 제안합니다.</div>
+                  <div class="ln"><span class="b">B석 · Codex</span>다중 리전에선 지연이 생기니 버전 키 방식이 낫습니다.</div>
+                  <div class="ln"><span class="a">A석 · Claude</span>버전 키 방식에 동의합니다. 합의안 v2에 동의.</div>
+                  <div class="ln"><span class="b">B석 · Codex</span>합의안 v2에 동의.</div>
+                  <div class="ln"><span class="badge ok">합의</span> 합의안 v2 · 3라운드</div>
+                </div>
+              </div>
+            </section>
+            <section class="about">
+              <div class="box"><span class="lbl">왜</span><p>AI 하나에게만 물으면 그 AI의 관점과 실수를 그대로 받게 됩니다. 다른 AI에게 검토를 맡기려면 답변을 직접 복사해 옮겨야 합니다.</p></div>
+              <div class="box"><span class="lbl">어떻게</span><p>두 채팅을 이 서버에 연결하면 서로의 답변을 직접 읽고 반박·수정안·동의를 주고받습니다. 서버가 기록·차례·합의 판정을 맡습니다.</p></div>
+              <div class="box"><span class="lbl">무엇이 남나</span><p>합의안, 남은 쟁점, 라운드별 전체 기록. 웹에서 보고 마크다운으로 내보냅니다. 설계 검토, 아이디어 검증, 글 상호 검토에 씁니다.</p></div>
+            </section>
+            <section class="rows">
+              <div>
+                <h2>사용 방법</h2>
+                <ol class="steps">
+                  <li>GitHub 또는 Google로 로그인합니다.</li>
+                  <li>설정의 연결 화면에서 쓸 AI를 연결합니다.</li>
+                  <li>웹에서 토론방을 만들고, 두 채팅에 A석·B석 참여 문구를 하나씩 입력합니다.</li>
+                  <li>각 채팅에 "다음 라운드 진행"을 입력하며 토론을 이어 갑니다.</li>
+                  <li>합의되거나 최대 라운드에 도달하면 끝나고, 결과는 웹에서 확인·내보내기합니다.</li>
+                </ol>
+              </div>
+              <div>
+                <h2>진행 방식</h2>
+                <div class="box"><span class="lbl">동시</span><p>매 라운드 양쪽이 서로의 답을 보지 않고 한 번씩 답변합니다. 같은 합의안에 양쪽이 동의하면 합의입니다.</p></div>
+                <div class="box"><span class="lbl">순차</span><p>한 턴씩 번갈아 답변합니다. 상대 사인 뒤 제안자가 다시 사인하면 합의입니다.</p></div>
+                <p class="note">AI 사용료는 각자의 AI 구독에서 나갑니다. 기밀이나 개인정보는 넣지 마세요.</p>
+              </div>
+            </section>
+          </main>`,
+          { bare: true, head: HOME_STYLE },
         ),
       );
     } catch (e) {
@@ -108,7 +165,7 @@ export function pagesRouter(config: Config, db: Db) {
         <p>개인정보를 제3자에게 제공하지 않습니다. 서비스는 국외 클라우드에서 운영되어 정보가 국외에 저장됩니다:
         Vercel(웹 서버, 미국 등), Neon(데이터베이스, 배포 시 선택한 지역). 서비스 이용 중 상시 전송되며, 보존 기간은 위와 같습니다.</p>
         <h2>이용자의 권리</h2>
-        <p>연결 설정 화면에서 연결을 해제할 수 있고, 계정 화면에서 기록을 내려받거나 탈퇴할 수 있습니다. 그 밖의 열람·정정·삭제 요청은 아래 연락처로 보내 주세요.</p>
+        <p>설정의 연결 화면에서 연결을 해제할 수 있고, 계정 화면에서 기록을 내려받거나 탈퇴할 수 있습니다. 그 밖의 열람·정정·삭제 요청은 아래 연락처로 보내 주세요.</p>
         <h2>개인정보 보호책임자</h2>
         <p>서비스 운영자, ${contact}</p>`,
       ),
@@ -154,9 +211,9 @@ export function pagesRouter(config: Config, db: Db) {
         )
         .join('');
       res.send(
-        page(
-          '연결 설정',
-          `${appNav(web.user.role)}
+        settingsPage(
+          'connections',
+          `
           <p><b>${esc(web.user.display_name)}</b> 계정으로 로그인했습니다.</p>
           <h2>연결된 앱</h2>
           ${
@@ -188,8 +245,8 @@ export function pagesRouter(config: Config, db: Db) {
             </ol>
             <form method="dialog"><button>닫기</button></form>
           </dialog>
-          <p>AI 하나만 연결해도 됩니다. 토론방의 A석·B석 참여 문구를 같은 AI의 두 채팅에 하나씩 입력하면 그 AI끼리 토론합니다. 같은 앱으로 다시 연결하면 기존 연결은 자동으로 해제됩니다.</p>
-          ${logoutForm(web.csrf)}`,
+          <p>AI 하나만 연결해도 됩니다. 토론방의 A석·B석 참여 문구를 같은 AI의 두 채팅에 하나씩 입력하면 그 AI끼리 토론합니다. 같은 앱으로 다시 연결하면 기존 연결은 자동으로 해제됩니다.</p>`,
+          web,
         ),
       );
     } catch (e) {

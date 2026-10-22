@@ -13,22 +13,32 @@ import {
   type CreateInput,
   type Discussion,
   type ProjectRef,
+  type Participant,
   type Reference,
+  type Status,
   type Turn,
 } from '../db/discussions.js';
-import { projectsFor, type Background } from '../db/projects.js';
+import { getIssueLedger, type IssueLedger } from '../db/issues.js';
+import { PROJECT_LIMITS, projectsFor, type Background } from '../db/projects.js';
 import { deleteUser } from '../db/users.js';
 import { crossingText, instructionFor, joinMessage, PARTICIPANT_NAME } from '../instructions.js';
-import { appNav, csrfField, esc, page } from './html.js';
-import { discussionMarkdown, KIND_LABEL, MODE_LABEL, projectMarkdown, renderMarkdown, STATUS_LABEL } from './markdown.js';
+import { formatTime, issueItem, parallelPage, pickView, sequentialPage, VIEW_STYLE } from './discussion-views.js';
+import { csrfField, esc, page, settingsPage } from './html.js';
+import { projectBackgroundsSection, projectDetailSection, projectHome } from './project-pages.js';
+import {
+  discussionMarkdown,
+  KIND_LABEL,
+  MODE_LABEL,
+  projectMarkdown,
+  renderMarkdown,
+  STATUS_LABEL,
+} from './markdown.js';
 import { checkCsrf, endSession } from './session.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NOTICE_DAYS = 30;
 const formBody = express.urlencoded({ extended: false, limit: '20kb' });
 
-const formatTime = (d: Date | null) =>
-  d ? new Date(d).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'medium', timeStyle: 'short' }) : '없음';
 const formatBytes = (n: number) => `${(n / 1_000_000).toFixed(2)}MB`;
 
 // 종료 후 180일이 지나면 정리 작업이 지운다. 삭제 30일 전부터 안내한다.
@@ -45,55 +55,65 @@ const deleteGuide = `<p class="warn">보관 한도(${CREATE_LIMITS.stored}개·$
 const roundsLabel = (d: Discussion) =>
   d.mode === 'parallel' ? `라운드 ${d.current_round}/${d.max_rounds}` : `턴 ${d.current_round}/${d.max_rounds}`;
 
-function turnBox(t: Turn, d: Discussion) {
-  const badges = [
-    t.agreement ? `<span class="badge">${esc(t.agreement)}${t.accepted_proposal_id ? ` → #${esc(t.accepted_proposal_id)}` : ''}</span>` : '',
-    t.sign ? '<span class="badge ok">사인</span>' : '',
-    d.agreed_proposal_id === t.id ? '<span class="badge ok">합의된 안</span>' : '',
-  ].join(' ');
-  const app = t.client_name ? ` <small>${esc(t.client_name)}</small>` : '';
-  return `<div class="turn"><p><b>${PARTICIPANT_NAME[t.participant]}</b>${app} <small>#${esc(t.id)} · ${formatTime(t.created_at)}</small> ${badges}</p>
-    ${renderMarkdown(t.content)}
-    ${t.proposal ? `<p><b>제안 #${esc(t.id)}</b></p>${renderMarkdown(t.proposal)}` : ''}
-    ${t.open_issues.length ? `<p>남은 이견</p><ul>${t.open_issues.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div>`;
+// 목록 화면: 왼쪽에 새 토론·상태·프로젝트 필터, 오른쪽에 토론 표. 프로젝트 탭이면 범위 줄 오른쪽에 새 토론 버튼
+const LIST_STYLE = `.split{display:grid;grid-template-columns:14rem 1fr;gap:2rem;align-items:start}
+.list-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.5rem 1rem;margin-bottom:1rem}.list-scope{margin:0}
+.side .btn{display:block;text-align:center}
+.side-nav{font-size:.88rem}
+.side-nav a{display:flex;align-items:center;justify-content:space-between;gap:.5rem;min-height:44px;padding:0 .6rem;color:var(--fg);text-decoration:none;border-left:2px solid transparent}
+.side-nav a span{font-family:var(--mono);font-size:.8rem;color:var(--mute)}.side-nav a:hover{color:var(--acc)}
+.side-nav a.on{border-left-color:var(--acc);background:var(--hl);color:var(--acc)}
+.side-nav summary{display:flex;align-items:center;min-height:44px;padding:0 .6rem;list-style:none;cursor:pointer;font-weight:600}
+.side-nav summary::-webkit-details-marker{display:none}
+.side-nav summary::before{content:"▸";font-family:var(--mono);color:var(--mute);width:1.1rem;flex:none}
+.side-nav details[open]>summary::before{content:"▾"}
+.side-nav .sub a{margin-left:1.1rem;padding-left:.6rem}
+.side-nav .note{margin:.3rem .6rem}
+.side-nav summary,.side-nav a{border-bottom:1px solid var(--line)}
+.split td:first-child{width:50%}.split .badge{white-space:nowrap}
+.badge.b,.turn-chip{color:var(--b)}.turn-chip{font-family:var(--mono);font-size:.78rem;white-space:nowrap}
+.when{font-family:var(--mono);font-size:.8rem;color:var(--mute);white-space:nowrap}
+@media (max-width:760px){.split{grid-template-columns:1fr;gap:1rem}
+.side-nav{display:flex;flex-wrap:wrap;gap:.3rem}.side-nav a{border:1px solid var(--line)}
+.hide-sm{display:none}}
+details.pj{border-top:1px solid var(--line);padding:.2rem 0 .6rem}
+details.pj>summary{cursor:pointer;font-weight:600;min-height:44px;display:flex;align-items:center;gap:.4rem;list-style:none}
+details.pj>summary::-webkit-details-marker{display:none}
+details.pj>summary::after{content:"▸";font-family:var(--mono);font-size:1.3em;line-height:1;color:var(--mute)}
+details.pj[open]>summary::after{content:"▾"}`;
+
+// 진행 중 토론의 차례. 동시는 현재 라운드에 아직 안 낸 자리, 순차는 마지막 제출의 반대쪽
+function turnChip(d: Discussion, state?: { submitted: Participant[]; last: Participant | null }) {
+  if (d.status !== 'active' || !state) return '';
+  const text =
+    d.mode === 'parallel'
+      ? state.submitted.length
+        ? `${PARTICIPANTS.filter((p) => !state.submitted.includes(p)).map((p) => PARTICIPANT_NAME[p]).join('·')} 대기`
+        : '양쪽 대기'
+      : state.last
+        ? `${PARTICIPANT_NAME[state.last === 'A' ? 'B' : 'A']} 차례`
+        : '선공 대기';
+  return `<br><span class="turn-chip">${text}</span>`;
 }
 
-// 동시: 라운드별 2열 비교. 웹은 진행 중 라운드의 제출도 보여 준다.
-function parallelRecord(d: Discussion, turns: Turn[]) {
-  const lastRound = Math.max(d.current_round, ...turns.map((t) => t.round));
-  const rows: string[] = [];
-  for (let r = 1; r <= lastRound; r++) {
-    const inRound = turns.filter((t) => t.round === r);
-    if (!inRound.length && !(d.status === 'active' && r === d.current_round)) continue;
-    const ongoing = d.status === 'active' && r === d.current_round;
-    const agreed = d.status === 'agreed' && r === d.current_round;
-    const cell = (p: (typeof PARTICIPANTS)[number]) => {
-      const t = inRound.find((x) => x.participant === p);
-      return t ? turnBox(t, d) : `<div class="turn"><b>${PARTICIPANT_NAME[p]}</b> <small>아직 제출 안 함</small></div>`;
-    };
-    rows.push(`<h3>라운드 ${r}${ongoing ? ' <span class="badge">진행 중</span>' : ''}${agreed ? ' <span class="badge ok">합의</span>' : ''}</h3>
-      <div class="cols">${PARTICIPANTS.map(cell).join('')}</div>`);
-  }
-  return rows.join('');
-}
+const STATUS_BADGE: Record<Status, string> = { active: 'badge ok', agreed: 'badge', max_reached: 'badge b', closed: 'badge' };
 
-// 순차: 대화형 타임라인과 다음 차례
-function sequentialRecord(d: Discussion, turns: Turn[]) {
-  const timeline = turns.map((t) => `<h3>턴 ${t.round}</h3>${turnBox(t, d)}`).join('');
-  if (d.status !== 'active') return timeline;
-  const last = turns.at(-1);
-  const next = last ? PARTICIPANT_NAME[last.participant === 'A' ? 'B' : 'A'] : '먼저 제출하는 쪽(선공)';
-  return `${timeline}<p><span class="badge">다음 차례</span> 턴 ${d.current_round}: ${next}</p>`;
-}
-
-function issuesOf(turns: Turn[]) {
-  const items = PARTICIPANTS.map((p) => {
+// 쟁점 요약: 열린 쟁점을 먼저, 종결된 쟁점(종결 턴·처리한 자리별 근거·변경 이력)은 따로. 종료된 토론에서 열린 채 남은 쟁점은 미종결로 표시한다.
+// 쟁점 ID가 없는 구 형식 이견(open_issues)은 자리별 마지막 제출의 것만 따로 보여 준다.
+function issuesOf(d: Discussion, turns: Turn[], ledger: IssueLedger) {
+  const list = (title: string, items: IssueLedger['issues']) =>
+    items.length ? `<h3>${title}</h3><ul>${items.map((i) => issueItem(d, i)).join('')}</ul>` : '';
+  const legacy = PARTICIPANTS.map((p) => {
     const last = turns.findLast((t) => t.participant === p);
     return last?.open_issues.length
       ? `<li><b>${PARTICIPANT_NAME[p]}</b> (#${esc(last.id)}): <ul>${last.open_issues.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></li>`
       : '';
   }).join('');
-  return items ? `<ul>${items}</ul>` : '<p>남은 이견이 없습니다.</p>';
+  const html =
+    list('열린 쟁점', ledger.issues.filter((i) => i.status === 'open')) +
+    list('종결된 쟁점', ledger.issues.filter((i) => i.status !== 'open')) +
+    (legacy ? `<h3>구 형식 이견</h3><ul>${legacy}</ul>` : '');
+  return html || '<p>남은 쟁점이 없습니다.</p>';
 }
 
 function conclusionOf(d: Discussion, turns: Turn[]) {
@@ -152,7 +172,7 @@ function backgroundChoices({ project, backgrounds, checked }: ProjectChoice) {
       ${esc(b.title)} <small>${KIND_LABEL[b.kind]}${b.location ? ` · ${esc(b.location)}` : ''}</small></label>`,
   );
   return `<input type="hidden" name="project_id" value="${esc(project.id)}">
-    <fieldset><legend>참조할 배경 항목 — 이 토론에 필요한 것만 고르세요 (프로젝트 <a href="/app/p/${esc(project.id)}">${esc(project.name)}</a>)</legend>
+    <fieldset><legend>참조할 배경 항목 — 이 토론에 필요한 것만 고르세요 (프로젝트 <a href="${esc(projectHome(project.id))}">${esc(project.name)}</a>)</legend>
       ${boxes.length ? boxes.join('') : '<p>아직 배경 항목이 없습니다.</p>'}
     </fieldset>`;
 }
@@ -160,6 +180,9 @@ function backgroundChoices({ project, backgrounds, checked }: ProjectChoice) {
 function newForm(csrf: string, values: Record<string, unknown> = {}, error = '', choice: ProjectChoice | null = null) {
   const v = (k: string) => esc(typeof values[k] === 'string' ? values[k] : '');
   const mode = values.mode === 'sequential' ? 'sequential' : 'parallel';
+  // 고른 방식의 설명만 보인다. 라디오를 바꾸면 app.js가 hidden과 placeholder를 바꾼다.
+  const only = (m: typeof mode) => `data-mode="${m}"${m === mode ? '' : ' hidden'}`;
+  const maxPlaceholder = { parallel: '기본 5', sequential: '기본 10' };
   return `${error ? `<p class="warn">${esc(error)}</p>` : ''}
     <p class="warn"><b>기밀이나 개인정보를 넣지 마세요.</b> 주제·배경과 AI 답변은 서버에 저장되며, 참여하는 AI 서비스에도 전달됩니다.</p>
     <form method="post" action="/app/new">${csrfField(csrf)}
@@ -167,12 +190,20 @@ function newForm(csrf: string, values: Record<string, unknown> = {}, error = '',
       <label>주제 (${INPUT_LIMITS.topic}자 이내)<br><input name="topic" required maxlength="${INPUT_LIMITS.topic}" size="60" value="${v('topic')}"></label>
       <label>배경 설명·제약 조건 (선택, ${INPUT_LIMITS.context}자 이내)<br><textarea name="context" maxlength="${INPUT_LIMITS.context}" rows="6" cols="60">${v('context')}</textarea></label>
       <fieldset><legend>진행 방식</legend>
-        <label><input type="radio" name="mode" value="parallel"${mode === 'parallel' ? ' checked' : ''}> 동시: 매 라운드 양쪽이 한 번씩 독립적으로 답변</label>
-        <label><input type="radio" name="mode" value="sequential"${mode === 'sequential' ? ' checked' : ''}> 순차: 한 턴씩 번갈아 답변, 사인 두 번으로 합의</label>
+        <label class="inline"><input type="radio" name="mode" value="parallel"${mode === 'parallel' ? ' checked' : ''}> 동시 (기본)</label>
+        <label class="inline"><input type="radio" name="mode" value="sequential"${mode === 'sequential' ? ' checked' : ''}> 순차</label>
+        <div ${only('parallel')}><b>매 라운드 A석·B석이 상대의 이번 답변을 보지 않고 각자 한 번씩 답변합니다.</b><br>
+          <small>다음 라운드에서 직전 라운드의 양쪽 답변을 읽고 반박·수정안·동의를 냅니다. 같은 라운드에 양쪽이 같은 합의안에 동의하면 합의입니다. 서로의 첫 의견에 끌려가지 않는 독립 검토에 맞습니다.</small></div>
+        <div ${only('sequential')}><b>한 번에 한 쪽만 답변하며 번갈아 진행합니다.</b><br>
+          <small>먼저 제출한 쪽이 선공이 되어 의견과 합의안을 냅니다. 상대는 이의나 수정안을 내거나, 현재 합의안을 수정 없이 받아들이면 사인합니다. 두 턴 연속으로 사인하면 합의입니다. 하나의 안을 주고받으며 다듬는 데 맞습니다.</small></div>
       </fieldset>
-      <label>최대 라운드(동시 2~10, 기본 5) 또는 최대 턴(순차 4~20, 기본 10)<br><input name="max_rounds" type="number" min="2" max="20" value="${v('max_rounds')}"></label>
-      <label>최소 라운드 (동시 방식만, 기본 2)<br><input name="min_rounds" type="number" min="2" max="10" value="${v('min_rounds')}"></label>
+      <label><span ${only('parallel')}>최대 라운드 (2~10)</span><span ${only('sequential')}>최대 턴 (4~20, 한쪽의 답변 하나가 한 턴)</span><br>
+        <input name="max_rounds" type="number" min="2" max="20" value="${v('max_rounds')}" placeholder="${maxPlaceholder[mode]}" data-parallel="${maxPlaceholder.parallel}" data-sequential="${maxPlaceholder.sequential}"><br>
+        <small>여기까지 합의가 안 되면 '최대 도달·합의 미확정'으로 끝납니다.</small></label>
+      <div ${only('parallel')}><label>최소 라운드 (2~10)<br><input name="min_rounds" type="number" min="2" max="10" value="${v('min_rounds')}" placeholder="기본 2"><br>
+        <small>이 라운드 전에는 양쪽이 동의해도 확정하지 않고 계속합니다.</small></label></div>
       <button type="submit">토론방 만들기</button>
+      <a class="btn" href="${esc(choice ? projectHome(choice.project.id) : '/app')}">취소</a>
     </form>`;
 }
 
@@ -211,39 +242,78 @@ export function discussionPagesRouter(config: Config, db: Db) {
     res.status(409).send(page('처리할 수 없음', `<p>${esc(e.message)}</p><p><a href="/app">토론 목록</a></p>`));
   };
 
-  router.get('/app', async (_req, res, next) => {
+  // ?project=<id>는 그 프로젝트의 토론, ?view=active|ended는 진행 중·종료된 토론만 보여 준다. 모르는 값은 무시한다
+  router.get('/app', async (req, res, next) => {
     try {
       const web = res.locals.web!;
       const repo = discussionsFor(db, web.user.id);
-      const [list, usage, projects] = await Promise.all([repo.list(), repo.usage(), projectsFor(db, web.user.id).list()]);
+      const [list, usage, projects, turns] = await Promise.all([
+        repo.list(),
+        repo.usage(),
+        projectsFor(db, web.user.id).list(),
+        repo.turnStates(),
+      ]);
       const full = usage.stored >= CREATE_LIMITS.stored || usage.bytes >= CREATE_LIMITS.bytes;
       const projectName = new Map(projects.map((p) => [p.id, p.name]));
-      const projectRows = projects
+      const qs = (k: string) => (typeof req.query[k] === 'string' ? (req.query[k] as string) : '');
+      const project = projectName.has(qs('project')) ? qs('project') : null;
+      const view = project ? null : qs('view') === 'active' || qs('view') === 'ended' ? qs('view') : null;
+      const link = (label: string, n: number, url: string, on: boolean) =>
+        `<a href="${url}"${on ? ' class="on" aria-current="page"' : ''}>${esc(label)} <span>${n}</span></a>`;
+
+      // 접히는 "프로젝트" 탭 아래 각 프로젝트 하위 탭. 그 밖에 "전체"(기본 선택)·"진행 중"·"종료". 한 번에 하나만 고른다
+      const active = list.filter((d) => d.status === 'active');
+      const ended = list.filter((d) => d.status !== 'active');
+      const projectLinks = projects
+        .map((p) => link(p.name, list.filter((d) => d.project_id === p.id).length, `/app?project=${esc(p.id)}`, project === p.id))
+        .join('');
+
+      const shown = project ? list.filter((d) => d.project_id === project) : view === 'active' ? active : view === 'ended' ? ended : list;
+      const rows = shown
         .map(
-          (p) => `<tr><td><a href="/app/p/${esc(p.id)}">${esc(p.name)}</a></td><td>${esc(p.description.slice(0, 80))}</td>
-            <td>${p.backgrounds}</td><td>${formatTime(p.updated_at)}</td></tr>`,
+          (d) => `<tr><td><a href="/app/d/${esc(d.id)}">${esc(d.topic)}</a><br><small>${
+            d.project_id ? `<a href="${esc(projectHome(d.project_id))}">${esc(projectName.get(d.project_id) ?? '')}</a> · ` : ''
+          }${MODE_LABEL[d.mode]}</small></td>
+            <td><span class="${STATUS_BADGE[d.status]}">${STATUS_LABEL[d.status]}</span>${turnChip(d, turns.get(d.id))}</td>
+            <td class="when hide-sm">${roundsLabel(d)}</td><td class="hide-sm"><small>${formatTime(d.updated_at)}</small></td></tr>`,
         )
         .join('');
-      const rows = list
-        .map(
-          (d) => `<tr><td><a href="/app/d/${esc(d.id)}">${esc(d.topic)}</a></td><td>${
-            d.project_id ? `<a href="/app/p/${esc(d.project_id)}">${esc(projectName.get(d.project_id) ?? '')}</a>` : ''
-          }</td><td>${MODE_LABEL[d.mode]}</td>
-            <td>${STATUS_LABEL[d.status]}</td><td>${roundsLabel(d)}</td><td>${formatTime(d.updated_at)}</td></tr>`,
-        )
-        .join('');
+      const scope = project ? projectName.get(project)! : view === 'active' ? '진행 중' : view === 'ended' ? '종료' : '';
+      const table = shown.length
+        ? `<table><tr><th>주제</th><th>상태</th><th class="hide-sm">진행</th><th class="hide-sm">최근 수정</th></tr>${rows}</table>`
+        : `<p>${list.length ? '조건에 맞는 토론이 없습니다.' : '아직 토론이 없습니다.'}</p>`;
+      // 프로젝트 탭은 정보·설정, 배경 항목, 토론 표를 접이식 구역으로 보여 준다
+      let body = table;
+      if (project) {
+        const { project: p, backgrounds } = await projectsFor(db, web.user.id).get(project);
+        body = `<details class="pj"><summary>프로젝트 정보·설정</summary>${projectDetailSection(web.csrf, p)}</details>
+            <details class="pj" open><summary>배경 항목 (${backgrounds.length}/${PROJECT_LIMITS.backgrounds})</summary>${projectBackgroundsSection(p, backgrounds)}</details>
+            <details class="pj" open><summary>토론 (${shown.length})</summary>${shown.length ? table : '<p>아직 이 프로젝트의 토론이 없습니다.</p>'}</details>`;
+      }
+
       res.send(
         page(
-          '내 토론',
-          `${appNav(web.user.role)}
-          <p>진행 중 ${usage.active}/${CREATE_LIMITS.active} · 보관 ${usage.stored}/${CREATE_LIMITS.stored} · 용량 ${formatBytes(usage.bytes)}/${formatBytes(CREATE_LIMITS.bytes)}</p>
-          ${full ? deleteGuide : ''}
-          <h2>프로젝트</h2>
-          <p><a class="btn" href="/app/projects/new">새 프로젝트</a></p>
-          ${projects.length ? `<table><tr><th>이름</th><th>설명</th><th>배경 항목</th><th>최근 수정</th></tr>${projectRows}</table>` : '<p>아직 프로젝트가 없습니다. 프로젝트를 만들면 여러 토론이 긴 배경 자료를 함께 참조할 수 있습니다.</p>'}
-          <h2>토론</h2>
-          <p><a class="btn" href="/app/new">새 토론방 만들기</a></p>
-          ${list.length ? `<table><tr><th>주제</th><th>프로젝트</th><th>방식</th><th>상태</th><th>진행</th><th>최근 수정</th></tr>${rows}</table>` : '<p>아직 토론이 없습니다.</p>'}`,
+          '토론 목록',
+          `<div class="split">
+          <aside class="side">
+            <a class="btn fill" href="/app/new">새 토론방</a>
+            <div class="side-nav" role="navigation" aria-label="토론 거르기">
+              <details open><summary>프로젝트</summary><div class="sub">${projectLinks}
+              <a href="/app/projects/new">+ 새 프로젝트</a></div></details>
+              ${link('전체', list.length, '/app', !project && !view)}
+              ${link('진행 중', active.length, '/app?view=active', view === 'active')}
+              ${link('종료', ended.length, '/app?view=ended', view === 'ended')}
+              ${projects.length ? '' : '<p class="note">프로젝트를 만들면 여러 토론이 긴 배경 자료를 함께 참조할 수 있습니다.</p>'}
+            </div>
+          </aside>
+          <div>
+            <div class="list-head"><p class="note list-scope">${scope ? `${esc(scope)} · ` : ''}${shown.length}개 · 최근 수정 순</p>
+              ${project ? `<a class="btn" href="/app/new?project=${esc(project)}">이 프로젝트에서 새 토론</a>` : ''}</div>
+            ${full ? deleteGuide : ''}
+            ${body}
+          </div>
+          </div>`,
+          { nav: web, head: LIST_STYLE },
         ),
       );
     } catch (e) {
@@ -261,7 +331,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
     const web = res.locals.web!;
     try {
       const choice = typeof req.query.project === 'string' ? await projectChoice(web.user.id, req.query.project) : null;
-      res.send(page('새 토론방', `${appNav(web.user.role)}${newForm(web.csrf, {}, '', choice)}`));
+      res.send(page('새 토론방', `${newForm(web.csrf, {}, '', choice)}`, { nav: web }));
     } catch (e) {
       handle(res, next, e);
     }
@@ -282,7 +352,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
         const choice = typeof body.project_id === 'string' && body.project_id ? await projectChoice(web.user.id, body.project_id, new Set(checkedIds(body))) : null;
         res
           .status(status)
-          .send(page('새 토론방', `${appNav(web.user.role)}${e.code === 'limit_exceeded' ? deleteGuide : ''}${newForm(web.csrf, body, e.message, choice)}`));
+          .send(page('새 토론방', `${e.code === 'limit_exceeded' ? deleteGuide : ''}${newForm(web.csrf, body, e.message, choice)}`, { nav: web }));
       } catch (e2) {
         handle(res, next, e2);
       }
@@ -292,11 +362,11 @@ export function discussionPagesRouter(config: Config, db: Db) {
   // 마크다운 내보내기. /app/d/:id보다 먼저 둔다.
   router.get('/app/d/:id.md', async (req, res, next) => {
     try {
-      const { discussion, turns, refs } = await discussionsFor(db, res.locals.web!.user.id).get(req.params.id);
+      const { discussion, turns, issueEvents, refs } = await discussionsFor(db, res.locals.web!.user.id).get(req.params.id);
       res
         .type('text/markdown; charset=utf-8')
         .attachment(`discussion-${discussion.id}.md`)
-        .send(discussionMarkdown(discussion, turns, refs));
+        .send(discussionMarkdown(discussion, turns, issueEvents, refs));
     } catch (e) {
       handle(res, next, e);
     }
@@ -305,7 +375,9 @@ export function discussionPagesRouter(config: Config, db: Db) {
   router.get('/app/d/:id', async (req, res, next) => {
     try {
       const web = res.locals.web!;
-      const { discussion: d, turns, project, refs } = await discussionsFor(db, web.user.id).get(req.params.id);
+      const snapshot = await discussionsFor(db, web.user.id).get(req.params.id);
+      const { discussion: d, turns, project, refs } = snapshot;
+      const ledger = getIssueLedger(snapshot, 'web');
       const ended = d.status !== 'active';
       const actions = ended
         ? `<form method="post" action="/app/d/${esc(d.id)}/delete">${csrfField(web.csrf)}
@@ -314,28 +386,35 @@ export function discussionPagesRouter(config: Config, db: Db) {
             <button type="submit">토론 삭제</button></form>`
         : `<form method="post" action="/app/d/${esc(d.id)}/close" class="inline">${csrfField(web.csrf)}<button type="submit">강제 종료</button></form>
            <p><small>진행 중인 토론은 먼저 종료해야 삭제할 수 있습니다.</small></p>`;
-      res.send(
-        page(
-          d.topic,
-          `${appNav(web.user.role)}
-          ${req.query.created ? '<p class="warn">토론방을 만들었습니다. 아래 참여 문구를 각 AI 채팅에 입력하세요.</p>' : ''}
-          ${retentionNotice(d)}
-          <p>토론 ID <code>${esc(d.id)}</code> · ${MODE_LABEL[d.mode]} 방식 · <span class="badge">${STATUS_LABEL[d.status]}</span> · ${roundsLabel(d)}${
+      const created = Boolean(req.query.created);
+      const notices = `
+          ${created ? '<p class="warn">토론방을 만들었습니다. 아래 참여 문구를 각 AI 채팅에 입력하세요.</p>' : ''}
+          ${retentionNotice(d)}`;
+      const meta = `<p>토론 ID <code>${esc(d.id)}</code> · ${MODE_LABEL[d.mode]} 방식 · <span class="badge">${STATUS_LABEL[d.status]}</span> · ${roundsLabel(d)}${
             d.mode === 'parallel' ? ` (최소 ${d.min_rounds})` : ''
           }${d.starter ? ` · 선공 ${PARTICIPANT_NAME[d.starter]}` : ''}${
-            project ? ` · 프로젝트 <a href="/app/p/${esc(project.id)}">${esc(project.name)}</a>` : ''
-          }</p>
-          ${d.context ? `<h2>배경</h2>${renderMarkdown(d.context)}` : ''}
-          ${referencesSection(refs)}
-          <h2>결론</h2>${conclusionOf(d, turns)}
-          <h2>쟁점</h2>${issuesOf(turns)}
-          <h2>기록</h2>${d.mode === 'parallel' ? parallelRecord(d, turns) : sequentialRecord(d, turns)}
-          ${turns.length || ended ? '' : '<p>아직 제출이 없습니다.</p>'}
-          <p><a href="/app/d/${esc(d.id)}.md">마크다운 내보내기</a></p>
+            project ? ` · 프로젝트 <a href="${esc(projectHome(project.id))}">${esc(project.name)}</a>` : ''
+          }</p>`;
+      const background = `${d.context ? `<h2>배경</h2>${renderMarkdown(d.context)}` : ''}
+          ${referencesSection(refs)}`;
+      const manage = `<p><a href="/app/d/${esc(d.id)}.md">마크다운 내보내기</a></p>
           ${actions}
-          ${ended ? '' : instructionsSection(d, project, refs)}`,
-        ),
-      );
+          ${ended ? '' : instructionsSection(d, project, refs)}`;
+      // 동시·순차 모두 사용자가 고른 화면 방식으로 보인다
+      const input = {
+        d,
+        turns,
+        ledger,
+        notices,
+        meta,
+        issues: issuesOf(d, turns, ledger),
+        conclusion: conclusionOf(d, turns),
+        extras: `${background}${manage}`,
+        extrasOpen: created,
+      };
+      const view = pickView(req, res);
+      const body = d.mode === 'parallel' ? parallelPage(view, input) : sequentialPage(view, input);
+      res.send(page(d.topic, body, { nav: web, head: VIEW_STYLE }));
     } catch (e) {
       handle(res, next, e);
     }
@@ -370,9 +449,9 @@ export function discussionPagesRouter(config: Config, db: Db) {
       const web = res.locals.web!;
       const usage = await discussionsFor(db, web.user.id).usage();
       res.send(
-        page(
-          '계정',
-          `${appNav(web.user.role)}
+        settingsPage(
+          'account',
+          `
           <p><b>${esc(web.user.display_name)}</b>${web.user.email ? ` (${esc(web.user.email)})` : ''} · 가입 ${formatTime(web.user.created_at)}</p>
           <h2>사용량</h2>
           <table>
@@ -389,6 +468,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
           <form method="post" action="/app/account/delete">${csrfField(web.csrf)}
             <label><input type="checkbox" name="confirm" value="yes" required> 기록을 내려받았고 탈퇴합니다</label>
             <button type="submit">회원 탈퇴</button></form>`,
+          web,
         ),
       );
     } catch (e) {
@@ -402,7 +482,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
       const [projects, all] = await Promise.all([projectsFor(db, userId).all(), discussionsFor(db, userId).all()]);
       const body = [
         ...projects.map(({ project, backgrounds }) => projectMarkdown(project, backgrounds)),
-        ...all.map(({ discussion, turns, refs }) => discussionMarkdown(discussion, turns, refs)),
+        ...all.map(({ discussion, turns, issueEvents, refs }) => discussionMarkdown(discussion, turns, issueEvents, refs)),
       ].join('\n---\n\n');
       res
         .type('text/markdown; charset=utf-8')

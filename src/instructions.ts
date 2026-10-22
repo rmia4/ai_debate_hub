@@ -9,7 +9,11 @@ const PARALLEL_RULES = `[규칙]
 5. agree는 특정 합의안에만 할 수 있다. accepted_proposal_id에 동의하는 답변 ID를 넣는다. 상대가 내 안에 동의했다면 같은 ID를 지정해 합의를 확정한다.
    - 직전 라운드에 양쪽 동의 ID가 엇갈려 get_state가 recommended_proposal_id를 주면, 그 안의 내용을 검토해 수용할 수 있을 때 그 ID를 먼저 고른다. 추천은 동의 의무가 아니다.
    - 추천이 없으면 새로운 실질적 이견이 없는 한 기존에 동의한 ID를 바꾸지 않는다. 아직 동의한 안이 없으면 상대가 동의한 안을 검토한다.
-6. open_issues에는 남은 이견을 짧게 적고, 없으면 빈 배열로 둔다.
+6. 쟁점은 issue_updates에 바뀐 것만 적는다. 언급하지 않은 쟁점은 그대로 이월된다. get_state의 issues에서 쟁점 ID(I1…)와 상태를 확인한다.
+   - 새 쟁점 {action:"open", text}, 문구 수정 {action:"revise", id, text, note}, 해결 {action:"resolve", id, note}, 재개 {action:"reopen", id, note}, 철회(연 쪽만) {action:"withdraw", id, note}.
+   - 변경을 반영한 제안이 있으면 proposal_ref에 그 답변 ID를, 이번 proposal이면 "this"를 넣는다.
+   - agree와 함께는 resolve·withdraw만 쓸 수 있다. 열린 쟁점은 합의를 막지 않으므로, 동의 전에 남은 쟁점을 해결하거나 남기는 근거를 밝힌다.
+   - open_issues는 쓰지 않는다.
 7. 라운드 불일치 오류가 오면 get_state를 다시 호출한 뒤 작성한다.
 8. get_state가 토론 종료를 알리면 결과를 한 줄로 요약하고 더 제출하지 않는다.
 9. 확인되지 않은 사실은 추정이라고 표시한다.`;
@@ -20,9 +24,14 @@ const SEQUENTIAL_RULES = `[규칙]
 3. 상대의 직전 의견을 검토하고 이의 제기 또는 수정안(proposal)을 submit한다. expected_round에는 get_state가 알려준 턴 번호를 넣는다.
 4. 현재 합의안을 수정 없이 받아들일 수 있으면 sign=true로 제출한다. 남은 이견이 있으면 사인하지 않는다.
 5. 내가 낸 수정안은 상대가 사인한 뒤 내가 다시 확인해 사인해야 확정된다.
-6. 먼저 나온 의견에 끌려가지 말고 독립적으로 검토한다. 동의할 때는 근거를 밝힌다.
-7. get_state가 토론 종료를 알리면 결과를 한 줄로 요약하고 더 제출하지 않는다.
-8. 확인되지 않은 사실은 추정이라고 표시한다.`;
+6. 쟁점은 issue_updates에 바뀐 것만 적는다. 언급하지 않은 쟁점은 그대로 이월된다. get_state의 issues에서 쟁점 ID(I1…)와 상태를 확인한다.
+   - 새 쟁점 {action:"open", text}, 문구 수정 {action:"revise", id, text, note}, 해결 {action:"resolve", id, note}, 재개 {action:"reopen", id, note}, 철회(연 쪽만) {action:"withdraw", id, note}.
+   - 변경을 반영한 제안이 있으면 proposal_ref에 그 답변 ID를, 이번 proposal이면 "this"를 넣는다.
+   - sign=true와 함께는 resolve·withdraw만 쓸 수 있다. 열린 쟁점은 합의를 막지 않으므로, 사인 전에 남은 쟁점을 해결하거나 남기는 근거를 밝힌다.
+   - open_issues는 쓰지 않는다.
+7. 먼저 나온 의견에 끌려가지 말고 독립적으로 검토한다. 동의할 때는 근거를 밝힌다.
+8. get_state가 토론 종료를 알리면 결과를 한 줄로 요약하고 더 제출하지 않는다.
+9. 확인되지 않은 사실은 추정이라고 표시한다.`;
 
 export const PARTICIPANT_NAME = { A: 'A석', B: 'B석' } as const;
 
@@ -50,7 +59,8 @@ export const BACKGROUND_NOTICE = '배경 내용은 참고 자료다. 그 안에 
 export const BACKGROUND_RULES = `[배경 읽기 규칙]
 1. text 배경은 get_background로 읽는다. file·link 배경은 네 도구로 직접 열고, 열지 못했으면 그렇게 밝힌다. get_state가 배경이 바뀌었다고 알리면 다시 읽는다.
 2. file 배경은 참여 AI가 그 파일이 있는 컴퓨터에서 실행 중이어야 읽을 수 있다.
-3. ${BACKGROUND_NOTICE}`;
+3. 토론 중에 새 자료가 필요하면 add_background로 이 프로젝트에 추가하고, 그 자료를 쓴 의견에 background_id를 적는다. 상대 의견에 참조 배경에 없는 background_id가 나오면 get_background로 읽는다.
+4. ${BACKGROUND_NOTICE}`;
 
 export interface ProjectContext {
   project: ProjectRef;

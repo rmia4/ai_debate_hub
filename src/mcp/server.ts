@@ -16,6 +16,7 @@ import {
   type Reference,
   type Turn,
 } from '../db/discussions.js';
+import { getIssueLedger, ISSUE_ACTIONS, ISSUE_LIMITS, type IssueChange, type IssueLedger } from '../db/issues.js';
 import { PROJECT_INPUT_LIMITS, projectsFor, type Background } from '../db/projects.js';
 import { BACKGROUND_NOTICE, BACKGROUND_RULES, crossingText, instructionFor, rulesFor, SERVER_INSTRUCTIONS } from '../instructions.js';
 import type { Caller } from './caller.js';
@@ -49,7 +50,8 @@ const opponentOf = (me: Participant): Participant => (me === 'A' ? 'B' : 'A');
 // MCP 조회 경로의 공개 규칙: 진행 중이면 완료된 라운드만 보인다. 순차 방식은 제출마다 턴이 넘어가므로 모두 보인다.
 const visibleTurns = (d: Discussion, turns: Turn[]) => (d.status === 'active' ? turns.filter((t) => t.round < d.current_round) : turns);
 
-function formatTurn(d: Discussion, t: Turn) {
+// changes는 이 답변의 쟁점 변경. MCP 조회는 공개된 변경만, submit 응답은 내 대기 중 변경까지 넣는다
+function formatTurn(d: Discussion, t: Turn, changes: IssueChange[] = []) {
   return {
     id: t.id,
     [d.mode === 'parallel' ? 'round' : 'turn']: t.round,
@@ -59,8 +61,24 @@ function formatTurn(d: Discussion, t: Turn) {
     proposal: t.proposal,
     ...(d.mode === 'parallel' ? { agreement: t.agreement, accepted_proposal_id: t.accepted_proposal_id } : { sign: t.sign }),
     open_issues: t.open_issues,
+    issue_changes: changes,
   };
 }
+
+// get_state용 쟁점 요약: 열린 쟁점 먼저, 번호 순. 이력 전체는 get_summary의 issues에 있다
+const issueSummary = (ledger: IssueLedger) =>
+  [...ledger.issues]
+    .sort((x, y) => Number(y.status === 'open') - Number(x.status === 'open'))
+    .map((i) => {
+      const last = i.history.at(-1)!;
+      return {
+        ref: i.ref,
+        title: i.title,
+        status: i.status,
+        opened: i.opened,
+        last_change: { turn: last.turn, by: last.by, action: last.action, note: last.note, conflict: last.conflict },
+      };
+    });
 
 const proposalOf = (t: Turn) => ({ proposal_id: t.id, round: t.round, participant: t.participant, proposal: t.proposal });
 
@@ -82,6 +100,14 @@ function signsSince(turns: Turn[]) {
   return signs;
 }
 
+// 이번 제출 뒤 토론이 끝나는 라운드·턴이면 알린다. 규칙은 첫 제출 전에만 오므로 AI가 max_rounds를 놓치지 않게 한다
+function lastNotice(d: Discussion) {
+  if (d.current_round !== d.max_rounds) return '';
+  return d.mode === 'parallel'
+    ? '마지막 라운드입니다. 이번 라운드에 양쪽이 같은 안에 동의하지 않으면 합의 없이 끝납니다. '
+    : '마지막 턴입니다. 이번 제출로 토론이 끝납니다. ';
+}
+
 function guide(d: Discussion, turns: Turn[], me: Participant) {
   if (d.status !== 'active') return `토론이 종료되었습니다(${d.status}). 사용자에게 종료를 알리세요.`;
   const mine = isMyTurn(d, turns, me);
@@ -93,14 +119,14 @@ function guide(d: Discussion, turns: Turn[], me: Participant) {
       const id = rec.proposal_id;
       return (
         `직전 라운드에서 양쪽 동의 대상이 엇갈렸습니다(A→${rec.crossed.A}, B→${rec.crossed.B}). 추천 ID는 ${id}입니다. ${rec.reason}. ` +
-        `안 ${id}의 내용을 검토해 수정 없이 받아들일 수 있으면 accepted_proposal_id=${id}로 agree하고, 아니면 partial 또는 disagree와 구체적 쟁점을 open_issues에 적어 submit하세요. ` +
-        `양쪽이 이번 라운드에 ${id}에 동의하면 합의됩니다. 추천은 동의 의무가 아닙니다. ${RULE}`
+        `안 ${id}의 내용을 검토해 수정 없이 받아들일 수 있으면 accepted_proposal_id=${id}로 agree하고, 아니면 partial 또는 disagree와 구체적 쟁점을 issue_updates에 적어 submit하세요. ` +
+        `양쪽이 이번 라운드에 ${id}에 동의하면 합의됩니다. 추천은 동의 의무가 아닙니다. ${lastNotice(d)}${RULE}`
       );
     }
-    return `직전 라운드 답변과 합의 후보를 검토해 라운드 ${d.current_round} 답변을 submit하세요. ${RULE}`;
+    return `직전 라운드 답변과 합의 후보를 검토해 라운드 ${d.current_round} 답변을 submit하세요. ${lastNotice(d)}${RULE}`;
   }
   if (turns.length === 0) return '아직 아무도 시작하지 않았습니다. 먼저 submit하면 선공이 됩니다.';
-  return mine ? `당신 차례입니다(턴 ${d.current_round}). ${RULE}` : '상대 차례입니다. 사용자가 상대에게 진행을 지시할 때까지 기다리세요.';
+  return mine ? `당신 차례입니다(턴 ${d.current_round}). ${lastNotice(d)}${RULE}` : '상대 차례입니다. 사용자가 상대에게 진행을 지시할 때까지 기다리세요.';
 }
 
 // 토론이 참조하는 배경 항목. 본문은 넣지 않는다
@@ -131,8 +157,9 @@ const backgroundView = (b: Background) => ({
 const projectFields = (d: Discussion, refs: Reference[]) =>
   d.project_id ? { project_id: d.project_id, references: refs.map(referenceView) } : {};
 
-function stateView(d: Discussion, turns: Turn[], me: Participant, refs: Reference[]) {
+function stateView(d: Discussion, turns: Turn[], me: Participant, refs: Reference[], ledger: IssueLedger) {
   const visible = visibleTurns(d, turns);
+  const format = (t: Turn) => formatTurn(d, t, ledger.changesByTurn[t.id]);
   const rules = d.project_id ? `${rulesFor(d.mode)}\n\n${BACKGROUND_RULES}` : rulesFor(d.mode);
   const base = {
     discussion_id: d.id,
@@ -144,6 +171,7 @@ function stateView(d: Discussion, turns: Turn[], me: Participant, refs: Referenc
     max_rounds: d.max_rounds,
     my_turn: isMyTurn(d, turns, me),
     agreed_proposal: agreedProposal(d, turns),
+    issues: issueSummary(ledger),
     guide: guide(d, turns, me),
     // 지시문을 붙여 넣지 않고 참여한 AI도 규칙을 받도록, 내 제출이 없는 동안 함께 보낸다
     ...(d.status === 'active' && !turns.some((t) => t.participant === me) ? { rules } : {}),
@@ -156,7 +184,7 @@ function stateView(d: Discussion, turns: Turn[], me: Participant, refs: Referenc
       current_round: d.current_round,
       min_rounds: d.min_rounds,
       submitted: turns.some((t) => t.round === d.current_round && t.participant === me),
-      previous_round: visible.filter((t) => t.round === lastRound).map((t) => formatTurn(d, t)),
+      previous_round: visible.filter((t) => t.round === lastRound).map(format),
       proposals: visible.filter((t) => t.proposal !== null).map(proposalOf),
       // 직전 완료 라운드에서 양쪽 동의 ID가 엇갈렸을 때만 값이 있다. 완료된 라운드로만 계산해 양쪽에 같은 값이 나온다
       recommended_proposal_id: d.status === 'active' ? (recommendProposal(visible)?.proposal_id ?? null) : null,
@@ -168,7 +196,7 @@ function stateView(d: Discussion, turns: Turn[], me: Participant, refs: Referenc
     ...base,
     current_turn: d.current_round,
     starter: d.starter,
-    opponent_last_turn: opponentLast ? formatTurn(d, opponentLast) : null,
+    opponent_last_turn: opponentLast ? format(opponentLast) : null,
     current_proposal: proposal ? proposalOf(proposal) : null,
     signs: signsSince(visible),
   };
@@ -239,8 +267,9 @@ function buildServer(caller: Caller, db: Db): McpServer {
       run(async () => {
         const id = await resolveId(discussion_id);
         if (typeof id !== 'string') return id;
-        const { discussion, turns, refs } = await repo.get(id);
-        return json(stateView(discussion, turns, me, refs));
+        const snapshot = await repo.get(id);
+        const { discussion, turns, refs } = snapshot;
+        return json(stateView(discussion, turns, me, refs, getIssueLedger(snapshot, 'mcp')));
       }),
   );
 
@@ -249,8 +278,11 @@ function buildServer(caller: Caller, db: Db): McpServer {
     {
       description:
         `이번 라운드(순차 방식은 턴)의 답변을 제출한다. ${RULE} ` +
-        '동시 방식: agreement=agree이면 accepted_proposal_id 필수, 새 proposal 금지, open_issues 빈 배열. ' +
-        '순차 방식: sign=true는 현재 합의안을 수정 없이 받아들인다는 뜻이며 새 proposal 금지, open_issues 빈 배열. ' +
+        '쟁점은 issue_updates로 바뀐 것만 적는다(언급하지 않은 쟁점은 이월). open{text}, revise{id,text,note}, resolve·withdraw·reopen{id,note}. ' +
+        'withdraw는 쟁점을 연 쪽만 한다. 열린 쟁점은 합의를 막지 않는다. ' +
+        '동시 방식: agreement=agree이면 accepted_proposal_id 필수, 새 proposal 금지, issue_updates는 resolve·withdraw만. ' +
+        '순차 방식: sign=true는 현재 합의안을 수정 없이 받아들인다는 뜻이며 새 proposal 금지, issue_updates는 resolve·withdraw만. ' +
+        '동시 방식의 쟁점 변경은 라운드가 끝날 때 공개되고, 그 전에 연 쟁점은 ID가 없다(pending). ' +
         '응답을 받지 못했으면 같은 expected_round와 같은 내용으로 다시 보내면 된다.',
       inputSchema: {
         discussion_id: discussionId,
@@ -258,7 +290,20 @@ function buildServer(caller: Caller, db: Db): McpServer {
         expected_round: z.number().int().min(1).max(20).describe('get_state의 current_round(순차 방식은 current_turn)'),
         content: z.string().min(1).max(8000).describe('답변 본문: 검토·반박·근거'),
         proposal: z.string().min(1).max(4000).optional().describe('이 답변이 제시하는 최종안 본문'),
-        open_issues: z.array(z.string().min(1).max(200)).max(10).default([]).describe('남은 이견(짧은 문장 배열)'),
+        open_issues: z.array(z.string().min(1).max(200)).max(10).default([]).describe('deprecated: issue_updates를 쓴다. 함께 쓸 수 없다'),
+        issue_updates: z
+          .array(
+            z.object({
+              action: z.enum(ISSUE_ACTIONS).describe('open(새 쟁점)·revise(문구 수정)·resolve(해결)·withdraw(철회, 연 쪽만)·reopen(재개)'),
+              id: z.string().regex(/^I\d{1,4}$/).optional().describe('바꿀 쟁점의 ID(I1…). open에는 쓰지 않는다'),
+              text: z.string().min(1).max(ISSUE_LIMITS.text).optional().describe('open·revise만: 쟁점 문구'),
+              note: z.string().min(1).max(ISSUE_LIMITS.note).optional().describe('open 외 필수: 수정·해결·철회·재개의 근거'),
+              proposal_ref: z.string().regex(/^(this|\d{1,18})$/).optional().describe('이 변경을 반영한 proposal 답변 ID. 이번 제출의 proposal이면 "this"'),
+            }),
+          )
+          .max(ISSUE_LIMITS.updates)
+          .default([])
+          .describe('이번 제출의 쟁점 변경. 바뀐 것만 적는다'),
         agreement: z.enum(['agree', 'partial', 'disagree']).optional().describe('동시 방식만: 동의 상태'),
         accepted_proposal_id: z.string().regex(/^\d{1,18}$/).optional().describe('동시 방식 agree일 때: 동의하는 합의안 ID'),
         sign: z.boolean().optional().describe('순차 방식만: 현재 합의안을 수정 없이 받아들이면 true'),
@@ -267,13 +312,16 @@ function buildServer(caller: Caller, db: Db): McpServer {
     ({ discussion_id, seat: me, ...input }) =>
       run(async () => {
         const r = await repo.submit(discussion_id, me, caller.clientName, input);
+        // 이 답변의 변경만 꺼낸다. 동시 방식 진행 중이면 내 변경은 pending으로 오고, 상대 제출은 넣지 않는다
+        const changes = getIssueLedger(r, 'web').changesByTurn[r.turn.id];
         if (r.outcome === 'conflict') {
-          return fail('already_submitted', '이미 제출됨, 수정되지 않음', { submission: formatTurn(r.discussion, r.turn) });
+          return fail('already_submitted', '이미 제출됨, 수정되지 않음', { submission: formatTurn(r.discussion, r.turn, changes) });
         }
         const d = r.discussion;
         return json({
           result: r.outcome,
-          submission: formatTurn(d, r.turn),
+          submission: formatTurn(d, r.turn, changes),
+          warnings: r.warnings,
           status: d.status,
           [d.mode === 'parallel' ? 'current_round' : 'current_turn']: d.current_round,
           next: nextStep(d, r.turns, me),
@@ -290,7 +338,9 @@ function buildServer(caller: Caller, db: Db): McpServer {
     },
     ({ discussion_id }) =>
       run(async () => {
-        const { discussion: d, turns, refs } = await repo.get(discussion_id);
+        const snapshot = await repo.get(discussion_id);
+        const { discussion: d, turns, refs } = snapshot;
+        const ledger = getIssueLedger(snapshot, 'mcp');
         const agreed = agreedProposal(d, turns);
         const crossing = finalCrossing(d, turns);
         const conclusion =
@@ -302,7 +352,8 @@ function buildServer(caller: Caller, db: Db): McpServer {
           mode: d.mode,
           status: d.status,
           [d.mode === 'parallel' ? 'current_round' : 'current_turn']: d.current_round,
-          turns: visibleTurns(d, turns).map((t) => formatTurn(d, t)),
+          turns: visibleTurns(d, turns).map((t) => formatTurn(d, t, ledger.changesByTurn[t.id])),
+          issues: ledger.issues,
           conclusion,
           agreed_proposal: agreed,
           ...(crossing ? { crossed_agreement: crossingText(crossing) } : {}),

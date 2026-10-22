@@ -139,6 +139,86 @@ describe('토론 화면', () => {
     expect(JSON.stringify(state.data)).not.toContain('진행 중 라운드의 클로드 답변');
   });
 
+  it('동시 토론 화면 방식은 기본이 A이고, 고른 방식은 쿠키로 기억하며 잘못된 값은 무시한다', async () => {
+    const u = await user(true);
+    const { id } = await webCreate(u);
+    await tool(u.claude, 'submit', { discussion_id: id, expected_round: 1, content: '화면 방식 확인용 답변', proposal: '안 A' });
+
+    const current = (html: string) => /<option value="(\w)" selected>/.exec(html)?.[1];
+    expect(current(await (await u.get(`/app/d/${id}`)).text())).toBe('a');
+    for (const v of ['b', 'c', 'd', 'e', 'a']) {
+      const html = await (await u.get(`/app/d/${id}?view=${v}`)).text();
+      expect(current(html)).toBe(v);
+      expect(html).toContain('화면 방식 확인용 답변');
+      expect(html).toContain('아직 제출 안 함');
+    }
+    await u.get(`/app/d/${id}?view=c`);
+    expect(current(await (await u.get(`/app/d/${id}`)).text())).toBe('c');
+    expect(current(await (await u.get(`/app/d/${id}?view=toString`)).text())).toBe('c');
+  });
+
+  it('순차 토론도 같은 다섯 화면 방식을 고를 수 있고, 현재 합의안과 다음 차례를 보여 준다', async () => {
+    const u = await user(true);
+    const { id } = await webCreate(u, { topic: '순차 화면 방식', mode: 'sequential' });
+    await tool(u.claude, 'submit', { discussion_id: id, expected_round: 1, content: '선공 A석 답변', proposal: '순차 첫 안' });
+
+    const current = (html: string) => /<option value="(\w)" selected>/.exec(html)?.[1];
+    expect(current(await (await u.get(`/app/d/${id}`)).text())).toBe('a');
+    for (const v of ['b', 'c', 'd', 'e', 'a']) {
+      const html = await (await u.get(`/app/d/${id}?view=${v}`)).text();
+      expect(current(html)).toBe(v);
+      expect(html).toContain('선공 A석 답변');
+      expect(html).toContain('순차 첫 안');
+      expect(html).toContain('B석 차례');
+    }
+    // 고른 방식은 동시·순차가 함께 쓴다
+    await u.get(`/app/d/${id}?view=e`);
+    const { id: parallel } = await webCreate(u);
+    expect(current(await (await u.get(`/app/d/${parallel}`)).text())).toBe('e');
+  });
+
+  it('목록은 진행 중 토론의 차례를 보여 주고, 프로젝트·진행 중·종료 탭으로 거를 수 있다', async () => {
+    const u = await user(true);
+    const pid = /^\/app\?project=(.+)$/.exec((await u.post('/app/projects/new', { name: '목록 프로젝트' })).headers.get('location') ?? '')?.[1];
+    const { id: half } = await webCreate(u, { topic: '한쪽만 낸 토론' });
+    await tool(u.claude, 'submit', { discussion_id: half, expected_round: 1, content: '답변', proposal: '안' });
+    await webCreate(u, { topic: '아무도 안 낸 순차 토론', mode: 'sequential' });
+    const { id: closed } = await webCreate(u, { topic: '닫은 프로젝트 토론', project_id: pid! });
+    await u.post(`/app/d/${closed}/close`);
+
+    const all = await (await u.get('/app')).text();
+    expect(all).toContain('B석 대기');
+    expect(all).toContain('선공 대기');
+    expect(all).toContain('목록 프로젝트');
+    // 사용량은 목록이 아니라 계정 화면에서 본다
+    expect(all).not.toContain('USAGE');
+
+    const onlyClosed = await (await u.get('/app?view=ended')).text();
+    expect(onlyClosed).toContain('닫은 프로젝트 토론');
+    expect(onlyClosed).not.toContain('한쪽만 낸 토론');
+
+    const onlyActive = await (await u.get('/app?view=active')).text();
+    expect(onlyActive).toContain('한쪽만 낸 토론');
+    expect(onlyActive).not.toContain('닫은 프로젝트 토론');
+
+    const inProject = await (await u.get(`/app?project=${pid}`)).text();
+    expect(inProject).toContain('닫은 프로젝트 토론');
+    expect(inProject).not.toContain('아무도 안 낸 순차 토론');
+    // 프로젝트 탭은 상세를 접이식 구역으로 그 자리에 보여 준다
+    expect(inProject).toContain('<summary>프로젝트 정보·설정</summary>');
+    expect(inProject).toContain('<summary>배경 항목 (0/');
+    expect(inProject).toContain(`action="/app/p/${pid}/edit"`);
+    expect(inProject).not.toContain('프로젝트 열기');
+    // 예전 단독 상세 주소는 프로젝트 탭으로 넘어간다
+    const old = await u.get(`/app/p/${pid}`);
+    expect(old.status).toBe(302);
+    expect(old.headers.get('location')).toBe(`/app?project=${pid}`);
+    // 기본 선택은 "전체"다
+    expect(all).toMatch(/class="on" aria-current="page">전체/);
+    // 모르는 값은 무시하고 전체를 보여 준다
+    expect(await (await u.get('/app?view=toString&project=nope')).text()).toContain('한쪽만 낸 토론');
+  });
+
   it('합의된 토론은 결론에 합의안을, 쟁점에 남은 이견을 보여 준다', async () => {
     const u = await user(true);
     const { id } = await webCreate(u, { min_rounds: '2', max_rounds: '3' });
@@ -163,7 +243,7 @@ describe('토론 화면', () => {
     const text = await md.text();
     expect(text).toContain('## 결론');
     expect(text).toContain('**최종안** 내용');
-    expect(text).toContain('남은 이견: 비용 미확정');
+    expect(text).toContain('구 형식 이견: 비용 미확정');
   });
 
   it('마지막 라운드에서 동의 대상이 엇갈린 채 끝나면 결론과 내보내기에 엇갈림을 표시한다', async () => {

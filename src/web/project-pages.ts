@@ -2,9 +2,9 @@ import express, { type Response } from 'express';
 import type { Config } from '../config.js';
 import type { Db } from '../db/db.js';
 import { DiscussionError } from '../db/discussions.js';
-import { BACKGROUND_KINDS, PROJECT_INPUT_LIMITS as L, PROJECT_LIMITS, projectsFor, type Background, type BackgroundKind } from '../db/projects.js';
-import { appNav, csrfField, esc, page } from './html.js';
-import { KIND_LABEL, renderMarkdown, STATUS_LABEL } from './markdown.js';
+import { BACKGROUND_KINDS, PROJECT_INPUT_LIMITS as L, PROJECT_LIMITS, projectsFor, type Background, type BackgroundKind, type Project } from '../db/projects.js';
+import { csrfField, esc, page } from './html.js';
+import { KIND_LABEL, renderMarkdown } from './markdown.js';
 import { checkCsrf } from './session.js';
 
 const formBody = express.urlencoded({ extended: false, limit: '20kb' });
@@ -19,11 +19,12 @@ const formatTime = (d: Date | null) =>
 
 const str = (body: Record<string, unknown>, k: string) => (typeof body[k] === 'string' ? (body[k] as string) : '');
 
-function projectForm(csrf: string, action: string, values: Record<string, unknown>, submit: string) {
+// cancel이 있으면 제출 버튼 옆에 그 주소로 돌아가는 취소 버튼을 둔다(새 프로젝트 화면)
+function projectForm(csrf: string, action: string, values: Record<string, unknown>, submit: string, cancel?: string) {
   return `<form method="post" action="${action}">${csrfField(csrf)}
       <label>이름 (${L.name}자 이내)<br><input name="name" required maxlength="${L.name}" size="60" value="${esc(str(values, 'name'))}"></label>
       <label>설명 (선택, ${L.description}자 이내)<br><textarea name="description" maxlength="${L.description}" rows="4" cols="60">${esc(str(values, 'description'))}</textarea></label>
-      <button type="submit">${submit}</button>
+      <button type="submit">${submit}</button>${cancel ? `\n      <a class="btn" href="${cancel}">취소</a>` : ''}
     </form>`;
 }
 
@@ -36,26 +37,59 @@ function parseBackground(kind: BackgroundKind, body: Record<string, unknown>) {
   };
 }
 
-function backgroundFields(values: Record<string, unknown>, kind: BackgroundKind | null) {
+function backgroundFields(values: Record<string, unknown>, kind: BackgroundKind) {
   const v = (k: string) => esc(str(values, k));
   return `<label>제목 (${L.title}자 이내)<br><input name="title" required maxlength="${L.title}" size="60" value="${v('title')}"></label>
       <label>요약 (선택, ${L.summary}자 이내. AI가 열기 전에 필요한지 판단하는 한 줄 설명)<br><input name="summary" maxlength="${L.summary}" size="60" value="${v('summary')}"></label>
-      ${kind === null || kind === 'text' ? `<label>본문 (text만, ${L.body.toLocaleString('ko-KR')}자 이내)<br><textarea name="body" maxlength="${L.body}" rows="16" cols="60">${v('body')}</textarea></label>` : ''}
-      ${kind === null || kind !== 'text' ? `<label>위치 (link는 http·https URL, file은 C:\\…·/… 같은 절대경로)<br><input name="location" maxlength="${L.location}" size="60" value="${v('location')}"></label>` : ''}`;
+      ${kind === 'text' ? `<label>본문 (text만, ${L.body.toLocaleString('ko-KR')}자 이내)<br><textarea name="body" maxlength="${L.body}" rows="16" cols="60">${v('body')}</textarea></label>` : ''}
+      ${kind !== 'text' ? `<label>위치 (link는 http·https URL, file은 C:\\…·/… 같은 절대경로)<br><input name="location" maxlength="${L.location}" size="60" value="${v('location')}"></label>` : ''}`;
 }
 
-function newBackgroundForm(csrf: string, projectId: string, values: Record<string, unknown> = {}, error = '') {
+// 종류 라디오를 탭 모양으로 두고, 고른 종류에 맞는 칸만 :has()로 보인다(CSP가 인라인 스크립트를 막는다)
+const NEW_BACKGROUND_STYLE = `.bg-sub{margin:-.6rem 0 .2rem;color:var(--mute)}.bg-sub b{font-weight:600}
+.bg-form input:not([type]),.bg-form textarea{width:100%}
+.bg-form .hint{color:var(--mute);font-size:.82rem}
+.kind-tabs{display:flex;flex-wrap:wrap;margin:1rem 0 0;padding:0;border:0;border-bottom:1px solid var(--line)}
+.kind-tabs legend{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.kind-tabs label{position:relative;margin:0 0 -1px;padding:.5rem 1.1rem;min-height:44px;display:flex;align-items:center;font-family:var(--mono);font-size:.88rem;color:var(--mute);cursor:pointer;border:1px solid transparent;border-bottom:0}
+.kind-tabs label::before{content:"[";color:var(--line)}.kind-tabs label::after{content:"]";color:var(--line)}
+.kind-tabs input{position:absolute;opacity:0}
+.kind-tabs label:has(:checked){color:var(--acc);border-color:var(--line);background:var(--panel)}
+.kind-tabs label:has(:focus-visible){outline:2px solid var(--acc);outline-offset:-2px}
+.kind-panel{background:var(--panel);border:1px solid var(--line);border-top:0;padding:1rem 1.2rem 0}
+.kind-panel .row2{display:grid;grid-template-columns:1fr 1.6fr;gap:1rem}.kind-panel .row2 label{margin:.4rem 0}
+.f-body,.f-loc,.h-link,.h-file{display:none}
+.bg-form:has([value=text]:checked) .f-body,.bg-form:has([value=link]:checked) .f-loc,.bg-form:has([value=file]:checked) .f-loc{display:block}
+.bg-form:has([value=link]:checked) .h-link,.bg-form:has([value=file]:checked) .h-file{display:block}
+.bg-bar{position:sticky;bottom:0;display:flex;align-items:center;gap:.5rem 1rem;margin:1rem -1.2rem 0;padding:.7rem 1.2rem;background:var(--panel);border-top:1px dashed var(--line)}
+.bg-bar .note{flex:1;min-width:0;margin:0}.bg-bar a,.bg-bar button{white-space:nowrap}
+@media (max-width:640px){.kind-panel .row2{grid-template-columns:1fr}.bg-bar{position:static;flex-wrap:wrap}.bg-bar .note{flex-basis:100%}}`;
+
+function newBackgroundForm(csrf: string, p: Project, count: number, values: Record<string, unknown> = {}, error = '') {
   const kind = BACKGROUND_KINDS.includes(values.kind as BackgroundKind) ? (values.kind as BackgroundKind) : 'text';
-  return `${error ? `<p class="warn">${esc(error)}</p>` : ''}
-    <p class="warn"><b>기밀이나 개인정보를 넣지 마세요.</b> text 본문은 서버에 저장되고 참여하는 AI 서비스에 전달됩니다. ${FILE_NOTE}</p>
-    <form method="post" action="/app/p/${esc(projectId)}/backgrounds/new">${csrfField(csrf)}
-      <fieldset><legend>종류</legend>
-        ${BACKGROUND_KINDS.map(
-          (k) => `<label><input type="radio" name="kind" value="${k}"${k === kind ? ' checked' : ''}> ${k} (${KIND_LABEL[k]})</label>`,
-        ).join('')}
+  const v = (k: string) => esc(str(values, k));
+  return `<p class="bg-sub"><a href="${esc(projectHome(p.id))}"><b>${esc(p.name)}</b></a> 프로젝트의 모든 토론에서 AI가 함께 참고하는 자료입니다. <span class="badge">배경 ${count}/${PROJECT_LIMITS.backgrounds}</span></p>
+    ${error ? `<p class="warn">${esc(error)}</p>` : ''}
+    <form class="bg-form" method="post" action="/app/p/${esc(p.id)}/backgrounds/new">${csrfField(csrf)}
+      <fieldset class="kind-tabs"><legend>종류</legend>
+        ${BACKGROUND_KINDS.map((k) => `<label><input type="radio" name="kind" value="${k}"${k === kind ? ' checked' : ''}>${k} ${KIND_LABEL[k]}</label>`).join('')}
       </fieldset>
-      ${backgroundFields(values, null)}
-      <button type="submit">배경 추가</button>
+      <div class="kind-panel">
+        <div class="row2">
+          <label>제목 <span class="hint">· ${L.title}자 이내</span><input name="title" required maxlength="${L.title}" value="${v('title')}"></label>
+          <label>요약 <span class="hint">· 선택, ${L.summary}자 이내</span><input name="summary" maxlength="${L.summary}" placeholder="AI가 열기 전에 필요한지 판단하는 한 줄 설명" value="${v('summary')}"></label>
+        </div>
+        <label class="f-body">본문 <span class="hint">· ${L.body.toLocaleString('ko-KR')}자 이내</span><textarea name="body" maxlength="${L.body}" rows="20">${v('body')}</textarea></label>
+        <label class="f-loc">위치
+          <span class="hint h-link">http·https URL</span>
+          <span class="hint h-file">C:\\…·/… 같은 절대경로. ${FILE_NOTE}</span>
+          <input name="location" maxlength="${L.location}" value="${v('location')}"></label>
+        <div class="bg-bar">
+          <p class="note"><b>기밀이나 개인정보를 넣지 마세요.</b> text 본문은 서버에 저장되고 참여하는 AI 서비스에 전달됩니다.</p>
+          <a class="btn" href="${esc(projectHome(p.id))}">취소</a>
+          <button type="submit" class="btn fill">배경 추가</button>
+        </div>
+      </div>
     </form>`;
 }
 
@@ -67,6 +101,29 @@ function backgroundRows(list: Background[]) {
         <td>${formatTime(b.updated_at)}</td><td>${esc(b.updated_by)}</td></tr>`,
     )
     .join('');
+}
+
+// 프로젝트 상세는 토론 목록의 프로젝트 탭(/app?project=<id>)에 접이식 구역으로 들어간다
+export const projectHome = (id: string) => `/app?project=${encodeURIComponent(id)}`;
+
+export function projectDetailSection(csrf: string, p: Project) {
+  const id = esc(p.id);
+  return `<p>프로젝트 ID <code>${id}</code></p>
+    ${p.description ? renderMarkdown(p.description) : ''}
+    <h3>프로젝트 수정</h3>
+    ${projectForm(csrf, `/app/p/${id}/edit`, p as unknown as Record<string, unknown>, '저장')}
+    <h3>프로젝트 삭제</h3>
+    <form method="post" action="/app/p/${id}/delete">${csrfField(csrf)}
+      <p>삭제하면 이 프로젝트의 배경 항목과 <b>종료된 토론 기록까지 모두</b> 즉시 지워지며 복구할 수 없습니다. 진행 중인 토론이 있으면 삭제할 수 없습니다. 먼저 <a href="/app/account/export.md">내보내기</a>로 기록을 저장하세요.</p>
+      <label><input type="checkbox" name="confirm" value="yes" required> 종료된 토론까지 함께 삭제됨을 확인했습니다</label>
+      <button type="submit">프로젝트 삭제</button></form>`;
+}
+
+export function projectBackgroundsSection(p: Project, backgrounds: Background[]) {
+  const id = esc(p.id);
+  return `<p><a class="btn" href="/app/p/${id}/backgrounds/new">배경 추가</a></p>
+    <p><small>${FILE_NOTE}</small></p>
+    ${backgrounds.length ? `<table><tr><th>제목</th><th>종류</th><th>요약 또는 위치</th><th>revision</th><th>최근 수정</th><th>수정한 쪽</th></tr>${backgroundRows(backgrounds)}</table>` : '<p>아직 배경 항목이 없습니다.</p>'}`;
 }
 
 // 구조와 오류 처리는 discussionPagesRouter를 따른다. 남의 프로젝트·항목은 없는 것과 같은 404다.
@@ -90,7 +147,7 @@ export function projectPagesRouter(config: Config, db: Db) {
 
   router.get('/app/projects/new', (_req, res) => {
     const web = res.locals.web!;
-    res.send(page('새 프로젝트', `${appNav(web.user.role)}<p>프로젝트는 사용자당 ${PROJECT_LIMITS.projects}개까지 만들 수 있습니다.</p>${projectForm(web.csrf, '/app/projects/new', {}, '프로젝트 만들기')}`));
+    res.send(page('새 프로젝트', `<p>프로젝트는 사용자당 ${PROJECT_LIMITS.projects}개까지 만들 수 있습니다.</p>${projectForm(web.csrf, '/app/projects/new', {}, '프로젝트 만들기', '/app')}`, { nav: web }));
   });
 
   router.post('/app/projects/new', formBody, async (req, res, next) => {
@@ -99,44 +156,20 @@ export function projectPagesRouter(config: Config, db: Db) {
     const body = req.body ?? {};
     try {
       const p = await projectsFor(db, web.user.id).create({ name: str(body, 'name').trim(), description: str(body, 'description').trim() });
-      res.redirect(303, `/app/p/${p.id}`);
+      res.redirect(303, projectHome(p.id));
     } catch (e) {
       if (!(e instanceof DiscussionError) || !['invalid_settings', 'limit_exceeded'].includes(e.code)) return handle(res, next, e);
       res
         .status(e.code === 'limit_exceeded' ? 409 : 400)
-        .send(page('새 프로젝트', `${appNav(web.user.role)}<p class="warn">${esc(e.message)}</p>${projectForm(web.csrf, '/app/projects/new', body, '프로젝트 만들기')}`));
+        .send(page('새 프로젝트', `<p class="warn">${esc(e.message)}</p>${projectForm(web.csrf, '/app/projects/new', body, '프로젝트 만들기', '/app')}`, { nav: web }));
     }
   });
 
+  // 예전 단독 상세 주소. 소유를 확인한 뒤 목록의 프로젝트 탭으로 보낸다
   router.get('/app/p/:id', async (req, res, next) => {
     try {
-      const web = res.locals.web!;
-      const { project: p, backgrounds, discussions } = await projectsFor(db, web.user.id).get(req.params.id);
-      const id = esc(p.id);
-      const discussionRows = discussions
-        .map((d) => `<tr><td><a href="/app/d/${esc(d.id)}">${esc(d.topic)}</a></td><td>${STATUS_LABEL[d.status]}</td><td>${formatTime(d.updated_at)}</td></tr>`)
-        .join('');
-      res.send(
-        page(
-          p.name,
-          `${appNav(web.user.role)}
-          <p>프로젝트 ID <code>${id}</code></p>
-          ${p.description ? renderMarkdown(p.description) : ''}
-          <h2>배경 항목 (${backgrounds.length}/${PROJECT_LIMITS.backgrounds})</h2>
-          <p><a class="btn" href="/app/p/${id}/backgrounds/new">배경 추가</a> <a class="btn" href="/app/new?project=${id}">이 프로젝트에서 새 토론</a></p>
-          <p><small>${FILE_NOTE}</small></p>
-          ${backgrounds.length ? `<table><tr><th>제목</th><th>종류</th><th>요약 또는 위치</th><th>revision</th><th>최근 수정</th><th>수정한 쪽</th></tr>${backgroundRows(backgrounds)}</table>` : '<p>아직 배경 항목이 없습니다.</p>'}
-          <h2>토론</h2>
-          ${discussions.length ? `<table><tr><th>주제</th><th>상태</th><th>최근 수정</th></tr>${discussionRows}</table>` : '<p>아직 이 프로젝트의 토론이 없습니다.</p>'}
-          <h2>프로젝트 수정</h2>
-          ${projectForm(web.csrf, `/app/p/${id}/edit`, p as unknown as Record<string, unknown>, '저장')}
-          <h2>프로젝트 삭제</h2>
-          <form method="post" action="/app/p/${id}/delete">${csrfField(web.csrf)}
-            <p>삭제하면 이 프로젝트의 배경 항목과 <b>종료된 토론 기록까지 모두</b> 즉시 지워지며 복구할 수 없습니다. 진행 중인 토론이 있으면 삭제할 수 없습니다. 먼저 <a href="/app/account/export.md">내보내기</a>로 기록을 저장하세요.</p>
-            <label><input type="checkbox" name="confirm" value="yes" required> 종료된 토론까지 함께 삭제됨을 확인했습니다</label>
-            <button type="submit">프로젝트 삭제</button></form>`,
-        ),
-      );
+      const { project } = await projectsFor(db, res.locals.web!.user.id).get(req.params.id);
+      res.redirect(302, projectHome(project.id));
     } catch (e) {
       handle(res, next, e);
     }
@@ -147,7 +180,7 @@ export function projectPagesRouter(config: Config, db: Db) {
     const body = req.body ?? {};
     try {
       await projectsFor(db, res.locals.web!.user.id).update(req.params.id, { name: str(body, 'name').trim(), description: str(body, 'description').trim() });
-      res.redirect(303, `/app/p/${req.params.id}`);
+      res.redirect(303, projectHome(req.params.id));
     } catch (e) {
       handle(res, next, e);
     }
@@ -167,8 +200,8 @@ export function projectPagesRouter(config: Config, db: Db) {
   router.get('/app/p/:id/backgrounds/new', async (req, res, next) => {
     try {
       const web = res.locals.web!;
-      const { project } = await projectsFor(db, web.user.id).get(req.params.id);
-      res.send(page(`배경 추가 · ${project.name}`, `${appNav(web.user.role)}${newBackgroundForm(web.csrf, project.id)}`));
+      const { project, backgrounds } = await projectsFor(db, web.user.id).get(req.params.id);
+      res.send(page('배경 추가', newBackgroundForm(web.csrf, project, backgrounds.length), { nav: web, head: NEW_BACKGROUND_STYLE }));
     } catch (e) {
       handle(res, next, e);
     }
@@ -182,12 +215,17 @@ export function projectPagesRouter(config: Config, db: Db) {
     try {
       if (!BACKGROUND_KINDS.includes(kind)) throw new DiscussionError('invalid_settings', '종류를 고르세요');
       await projectsFor(db, web.user.id).addBackground(req.params.id, { kind, ...parseBackground(kind, body) }, WEB_EDITOR);
-      res.redirect(303, `/app/p/${req.params.id}`);
+      res.redirect(303, projectHome(req.params.id));
     } catch (e) {
       if (!(e instanceof DiscussionError) || !['invalid_settings', 'limit_exceeded'].includes(e.code)) return handle(res, next, e);
-      res
-        .status(e.code === 'limit_exceeded' ? 409 : 400)
-        .send(page('배경 추가', `${appNav(web.user.role)}${newBackgroundForm(web.csrf, req.params.id, body, e.message)}`));
+      try {
+        const { project, backgrounds } = await projectsFor(db, web.user.id).get(req.params.id);
+        res
+          .status(e.code === 'limit_exceeded' ? 409 : 400)
+          .send(page('배경 추가', newBackgroundForm(web.csrf, project, backgrounds.length, body, e.message), { nav: web, head: NEW_BACKGROUND_STYLE }));
+      } catch (e2) {
+        handle(res, next, e2);
+      }
     }
   });
 
@@ -203,8 +241,8 @@ export function projectPagesRouter(config: Config, db: Db) {
       res.send(
         page(
           b.title,
-          `${appNav(web.user.role)}
-          <p><a href="/app/p/${esc(b.project_id)}">프로젝트로</a> · 항목 ID <code>${id}</code> · ${KIND_LABEL[b.kind]} · r${b.revision} · ${formatTime(b.updated_at)} ${esc(b.updated_by)}</p>
+          `
+          <p><a href="${esc(projectHome(b.project_id))}">프로젝트로</a> · 항목 ID <code>${id}</code> · ${KIND_LABEL[b.kind]} · r${b.revision} · ${formatTime(b.updated_at)} ${esc(b.updated_by)}</p>
           ${b.summary ? `<p>${esc(b.summary)}</p>` : ''}
           ${content}
           <h2>수정</h2>
@@ -218,6 +256,7 @@ export function projectPagesRouter(config: Config, db: Db) {
             <p>진행 중인 토론이 참조하면 삭제할 수 없습니다. 종료된 토론이 참조하면 목록에서만 사라지고, 그 토론 기록에는 "삭제됨"으로 남습니다.</p>
             <label><input type="checkbox" name="confirm" value="yes" required> 이 항목을 삭제합니다</label>
             <button type="submit">항목 삭제</button></form>`,
+          { nav: web },
         ),
       );
     } catch (e) {
@@ -246,7 +285,7 @@ export function projectPagesRouter(config: Config, db: Db) {
       const repo = projectsFor(db, res.locals.web!.user.id);
       const { project_id } = await repo.getBackground(req.params.bid);
       await repo.removeBackground(req.params.bid);
-      res.redirect(303, `/app/p/${project_id}`);
+      res.redirect(303, projectHome(project_id));
     } catch (e) {
       handle(res, next, e);
     }

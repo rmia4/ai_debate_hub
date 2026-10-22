@@ -53,7 +53,7 @@ MCP는 AI가 먼저 호출해야 응답하므로 서버가 채팅에 지시문�
 | --- | --- | --- | --- |
 | `start_discussion` | `topic`, `context`(선택), `mode`(`parallel`/`sequential`, 기본 `parallel`), `max_rounds`(동시 기본 5, 순차 기본 10), `min_rounds`(동시 기본 2), `project_id`(선택), `background_ids`(선택, `project_id`와 함께만. 생략하면 참조 없음. 참조마다 `get_state` 목록과 읽기 비용이 늘어나므로 필요한 항목만 고름) | `discussion_id`, 자리별(`A`/`B`) 지시문 | 웹 생성이 기본이고, 채팅에서 만들 때만 사용. 접속 주소·비밀값은 반환하지 않음. 동시: 2 ≤ `min_rounds` ≤ `max_rounds` ≤ 10, 순차: 4 ≤ `max_rounds` ≤ 20 |
 | `get_state` | `discussion_id`(선택), `seat` | 주제·배경, 진행 방식, 현재 라운드(순차는 턴), 내 차례·제출 여부, 직전 답변(동시: 양쪽, 순차: 상대 직전 턴), 각 답변의 동의 대상 ID, 합의 후보 목록(완료된 라운드의 `proposal` ID·라운드·제안자·본문), 순차 방식의 현재 합의안과 사인 현황, 토론 상태, 내 제출이 없는 동안 방식별 규칙(`rules`) | `discussion_id`를 생략하면 진행 중인 토론이 하나일 때 그 토론, 없으면 `not_found`, 여럿이면 `choose_discussion`과 목록. 동시 방식 라운드 1은 상대 답변 없음. 진행 중인 라운드의 새 합의안은 상대에게 숨김. 순차 방식에서 아무도 시작하지 않았으면 "먼저 제출하면 선공"을 안내. 동시 방식은 직전 라운드 동의 ID가 엇갈렸을 때 `recommended_proposal_id`([동의 대상이 엇갈렸을 때](#동의-대상이-엇갈렸을-때)) |
-| `submit` | `discussion_id`, `seat`, `expected_round`, `content`, `proposal`(선택), `open_issues`, 동시 방식: `agreement`·`accepted_proposal_id`, 순차 방식: `sign` | 접수 결과, 다음 차례, 합의 판정 결과 | 같은 번호의 기존 제출이 있으면 그 결과 반환(재시도). 순차 방식은 `agreement`를 받지 않음 |
+| `submit` | `discussion_id`, `seat`, `expected_round`, `content`, `proposal`(선택), `issue_updates`(선택), `open_issues`(deprecated), 동시 방식: `agreement`·`accepted_proposal_id`, 순차 방식: `sign` | 접수 결과(이 답변의 `issue_changes`), 비차단 `warnings`, 다음 차례, 합의 판정 결과 | 같은 번호의 기존 제출이 있으면 그 결과 반환(재시도). 순차 방식은 `agreement`를 받지 않음 |
 | `get_summary` | `discussion_id` | 진행 중: 완료된 라운드·턴만 / 종료 후: 전체 기록과 결론. 각 답변의 합의안 ID와 본문 포함 | 진행 중인 라운드 답변은 노출하지 않음. 마지막 라운드 동의 대상이 엇갈린 채 `max_reached`로 끝났으면 `crossed_agreement` |
 | `list_discussions` | `status`(선택: `active`/`agreed`/`max_reached`/`closed`) | 내 토론의 ID·주제·상태·방식·프로젝트 ID·최근 수정 시각, 최근 수정 순 | 종료된 토론도 포함. 본문은 넣지 않음. 보관 한도가 50개라 페이지를 나누지 않음 |
 
@@ -65,7 +65,8 @@ MCP는 AI가 먼저 호출해야 응답하므로 서버가 채팅에 지시문�
 - `agreement`(동시 방식만): `agree`(동의) / `partial`(부분 동의) / `disagree`(반대). 순차 방식은 `sign`과 겹치므로 받지 않고, 웹 표시용으로 서버가 파생합니다(사인 = 동의).
 - `accepted_proposal_id`(동시 방식): 같은 토론의 완료된 라운드 답변 중 `proposal`이 있는 것(자신 또는 상대)만 지정할 수 있습니다.
 - `sign`(순차 방식): 현재 합의안을 수정 없이 받아들일 때 `true`.
-- `open_issues`: 아직 남은 이견을 짧은 문장 배열로 냅니다.
+- `issue_updates`(최대 10개): 쟁점 변경. 아래 [쟁점 추적](#쟁점-추적) 참고.
+- `open_issues`: deprecated. 저장·'구 형식 이견' 표시만 하고, `issue_updates`와 함께 비어 있지 않으면 거부합니다.
 - 재시도 판별은 `expected_round`와 `(토론, 라운드, 참여자)` 유니크 제약으로 합니다. 별도 `request_id`는 두지 않습니다. 같은 번호로 다른 내용을 보내면 "이미 제출됨, 수정되지 않음" 오류와 함께 저장된 제출을 반환합니다.
 - 도구 설명(description)에 "쉽게 동의하지 말고 근거를 제시할 것"을 명시합니다.
 
@@ -75,9 +76,9 @@ MCP는 AI가 먼저 호출해야 응답하므로 서버가 채팅에 지시문�
 
 | 방식 | 제출 종류 | 필수 규칙 |
 | --- | --- | --- |
-| 동시 | `agree` | `accepted_proposal_id` 필수, 새 `proposal` 금지, `open_issues` 빈 배열 |
+| 동시 | `agree` | `accepted_proposal_id` 필수, 새 `proposal` 금지, `open_issues` 빈 배열, `issue_updates`는 `resolve`·`withdraw`만 |
 | 동시 | `partial` / `disagree` | `accepted_proposal_id` 사용 안 함, `proposal`은 선택 |
-| 순차 | 사인 (`sign=true`) | 새 `proposal` 금지, 현재 합의안 존재, `open_issues` 빈 배열 |
+| 순차 | 사인 (`sign=true`) | 새 `proposal` 금지, 현재 합의안 존재, `open_issues` 빈 배열, `issue_updates`는 `resolve`·`withdraw`만 |
 | 순차 | 이의·수정 (`sign=false`) | `proposal`은 선택 |
 
 ### 공개 규칙
@@ -156,4 +157,10 @@ MCP는 AI가 먼저 호출해야 응답하므로 서버가 채팅에 지시문�
 
 ## 쟁점 추적
 
-`open_issues`는 자유 문장이라 라운드 간 같은 쟁점을 자동으로 묶기 어렵습니다. 1단계는 라운드별 목록만 보여 줍니다. 필요하면 `submit`에 `resolved_issues`를 추가해 해소/미해소를 구분합니다.
+토론마다 쟁점에 고정 표시 ID(`I1`…)를 붙이고, 턴마다 바뀐 것만 이벤트로 남깁니다(합의안 #23). 언급하지 않은 쟁점은 그대로 이월됩니다.
+
+- 입력: `open{text}` / `revise{id,text,note}` / `resolve{id,note}` / `withdraw{id,note}`(연 쪽만) / `reopen{id,note}`, 선택 `proposal_ref`(공개된 proposal 답변 ID, 이번 proposal이면 `"this"`). 한 제출에서 같은 ID는 한 번만 바꿉니다.
+- 상태: `open` / `resolved` / `withdrawn`. `resolved`는 한쪽의 명시적 해결 기록입니다(양측 승인 아님). 열린 쟁점은 합의를 막지 않고 자동 종결하지도 않습니다. 종료 화면·내보내기에 미종결로 표시합니다.
+- `warnings`: agree·`sign=true` 제출에서 열린 쟁점이 남으면 안내합니다. 이번 제출의 변경을 반영해 계산하되, 동시 방식은 직전 공개 스냅샷과 내 변경만 기준으로 하고 `basis_round`를 함께 줍니다.
+- 동시 방식: 두 제출은 라운드 시작 공개 스냅샷으로 검증하고, 이벤트는 대기 저장했다가 라운드가 끝날 때(다음 라운드·합의·최대 도달) 또는 수동 종료 때 함께 공개합니다. 새 번호는 공개 시 A→B, 제출 내 배열 순서로 매기며, 공개 전 open 응답은 `pending:true`이고 표시 ID가 없습니다. 같은 쟁점의 같은 변경(action·text·proposal_ref)은 합치고 두 기록을 남기며, 다른 변경은 양쪽 `conflict`로 두고 상태 `open`·직전 공개 문구를 유지합니다.
+- 읽기: `getIssueLedger(snapshot, 'mcp'|'web')` → `{issues, changesByTurn}`. MCP는 공개된 이벤트만, 웹은 진행 중 라운드 이벤트를 `pending:true`로 `changesByTurn`에만 넣습니다. `get_state`는 열린 쟁점 우선 요약(`issues`), `get_summary`는 전체 `issues`, 각 답변은 `issue_changes`를 가집니다.
