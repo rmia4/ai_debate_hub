@@ -100,6 +100,14 @@ function signsSince(turns: Turn[]) {
   return signs;
 }
 
+// 이번 제출 뒤 토론이 끝나는 라운드·턴이면 알린다. 규칙은 첫 제출 전에만 오므로 AI가 max_rounds를 놓치지 않게 한다
+function lastNotice(d: Discussion) {
+  if (d.current_round !== d.max_rounds) return '';
+  return d.mode === 'parallel'
+    ? '마지막 라운드입니다. 이번 라운드에 양쪽이 같은 안에 동의하지 않으면 합의 없이 끝납니다. '
+    : '마지막 턴입니다. 이번 제출로 토론이 끝납니다. ';
+}
+
 function guide(d: Discussion, turns: Turn[], me: Participant) {
   if (d.status !== 'active') return `토론이 종료되었습니다(${d.status}). 사용자에게 종료를 알리세요.`;
   const mine = isMyTurn(d, turns, me);
@@ -112,13 +120,13 @@ function guide(d: Discussion, turns: Turn[], me: Participant) {
       return (
         `직전 라운드에서 양쪽 동의 대상이 엇갈렸습니다(A→${rec.crossed.A}, B→${rec.crossed.B}). 추천 ID는 ${id}입니다. ${rec.reason}. ` +
         `안 ${id}의 내용을 검토해 수정 없이 받아들일 수 있으면 accepted_proposal_id=${id}로 agree하고, 아니면 partial 또는 disagree와 구체적 쟁점을 issue_updates에 적어 submit하세요. ` +
-        `양쪽이 이번 라운드에 ${id}에 동의하면 합의됩니다. 추천은 동의 의무가 아닙니다. ${RULE}`
+        `양쪽이 이번 라운드에 ${id}에 동의하면 합의됩니다. 추천은 동의 의무가 아닙니다. ${lastNotice(d)}${RULE}`
       );
     }
-    return `직전 라운드 답변과 합의 후보를 검토해 라운드 ${d.current_round} 답변을 submit하세요. ${RULE}`;
+    return `직전 라운드 답변과 합의 후보를 검토해 라운드 ${d.current_round} 답변을 submit하세요. ${lastNotice(d)}${RULE}`;
   }
   if (turns.length === 0) return '아직 아무도 시작하지 않았습니다. 먼저 submit하면 선공이 됩니다.';
-  return mine ? `당신 차례입니다(턴 ${d.current_round}). ${RULE}` : '상대 차례입니다. 사용자가 상대에게 진행을 지시할 때까지 기다리세요.';
+  return mine ? `당신 차례입니다(턴 ${d.current_round}). ${lastNotice(d)}${RULE}` : '상대 차례입니다. 사용자가 상대에게 진행을 지시할 때까지 기다리세요.';
 }
 
 // 토론이 참조하는 배경 항목. 본문은 넣지 않는다
