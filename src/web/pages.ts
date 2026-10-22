@@ -5,7 +5,7 @@ import { listConnections, revokeConnection } from '../oauth/connections.js';
 import { loginUrl } from './auth-routes.js';
 import { discussionPagesRouter } from './discussion-pages.js';
 import { projectPagesRouter } from './project-pages.js';
-import { appNav, esc, page, suspendedPage } from './html.js';
+import { appNav, esc, page, settingsPage, suspendedPage } from './html.js';
 import { checkCsrf, loadSession, type WebSession } from './session.js';
 
 // Codex 플러그인 마켓플레이스 값. 플러그인 패키지는 이 저장소의 CODEX_PLUGIN_REF 브랜치에 둔다.
@@ -101,7 +101,7 @@ export function pagesRouter(config: Config, db: Db) {
                 <h2>사용 방법</h2>
                 <ol class="steps">
                   <li>GitHub 또는 Google로 로그인합니다.</li>
-                  <li>연결 설정 화면에서 쓸 AI를 연결합니다.</li>
+                  <li>설정의 연결 화면에서 쓸 AI를 연결합니다.</li>
                   <li>웹에서 토론방을 만들고, 두 채팅에 A석·B석 참여 문구를 하나씩 입력합니다.</li>
                   <li>각 채팅에 "다음 라운드 진행"을 입력하며 토론을 이어 갑니다.</li>
                   <li>합의되거나 최대 라운드에 도달하면 끝나고, 결과는 웹에서 확인·내보내기합니다.</li>
@@ -165,7 +165,7 @@ export function pagesRouter(config: Config, db: Db) {
         <p>개인정보를 제3자에게 제공하지 않습니다. 서비스는 국외 클라우드에서 운영되어 정보가 국외에 저장됩니다:
         Vercel(웹 서버, 미국 등), Neon(데이터베이스, 배포 시 선택한 지역). 서비스 이용 중 상시 전송되며, 보존 기간은 위와 같습니다.</p>
         <h2>이용자의 권리</h2>
-        <p>연결 설정 화면에서 연결을 해제할 수 있고, 계정 화면에서 기록을 내려받거나 탈퇴할 수 있습니다. 그 밖의 열람·정정·삭제 요청은 아래 연락처로 보내 주세요.</p>
+        <p>설정의 연결 화면에서 연결을 해제할 수 있고, 계정 화면에서 기록을 내려받거나 탈퇴할 수 있습니다. 그 밖의 열람·정정·삭제 요청은 아래 연락처로 보내 주세요.</p>
         <h2>개인정보 보호책임자</h2>
         <p>서비스 운영자, ${contact}</p>`,
       ),
@@ -211,8 +211,8 @@ export function pagesRouter(config: Config, db: Db) {
         )
         .join('');
       res.send(
-        page(
-          '연결 설정',
+        settingsPage(
+          'connections',
           `
           <p><b>${esc(web.user.display_name)}</b> 계정으로 로그인했습니다.</p>
           <h2>연결된 앱</h2>
@@ -246,7 +246,7 @@ export function pagesRouter(config: Config, db: Db) {
             <form method="dialog"><button>닫기</button></form>
           </dialog>
           <p>AI 하나만 연결해도 됩니다. 토론방의 A석·B석 참여 문구를 같은 AI의 두 채팅에 하나씩 입력하면 그 AI끼리 토론합니다. 같은 앱으로 다시 연결하면 기존 연결은 자동으로 해제됩니다.</p>`,
-          { nav: web },
+          web,
         ),
       );
     } catch (e) {
