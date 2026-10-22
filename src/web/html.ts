@@ -51,6 +51,7 @@ details.turn>summary::before{content:"▸";font-family:var(--mono);color:var(--m
 .topbar nav button::before{content:"[";color:var(--line)}.topbar nav button::after{content:"]";color:var(--line)}
 body>main{flex:1 0 auto;width:100%}
 footer{flex:none;height:3.2rem;line-height:3.2rem;padding:0 1rem;white-space:nowrap;overflow:hidden;font-family:var(--mono);font-size:.78rem;color:var(--mute);border-top:1px dashed var(--line);text-align:center}footer a{color:inherit}
+.totop{position:fixed;right:max(1.2rem,calc(50% - 38rem));bottom:4rem;z-index:10;width:3rem;height:3rem;border-radius:50%;display:flex;flex-direction:column;line-height:1.1;align-items:center;justify-content:center;font-family:var(--mono);font-size:.8rem;font-weight:600;color:var(--acc);background:var(--panel);border:1px solid var(--acc);text-decoration:none;transition:background .15s,color .15s}.totop:hover{background:var(--acc);color:var(--bg)}
 .settings{display:grid;grid-template-columns:12rem minmax(0,1fr);gap:2rem;align-items:start}.settings>section>:first-child{margin-top:0}
 .side{display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line)}
 .side a{padding:.55rem .9rem;color:var(--fg);text-decoration:none;border-left:3px solid transparent}.side a:hover{color:var(--acc)}
@@ -72,6 +73,7 @@ export const page = (title: string, body: string, opts: { bare?: boolean; head?:
 <script src="/static/app.js?v=${APP_JS_VERSION}" defer></script>
 </head><body>${opts.bare ? body : `<header class="topbar"><a class="brand" href="/">ai-debate-hub</a>${opts.nav ? appNav(opts.nav) : ''}</header>
 <main class="wrap"><h1>${esc(title)}</h1>${body}</main>`}
+<a class="totop" href="#" aria-label="맨 위로"><span aria-hidden="true">↑</span>top</a>
 <footer><a href="/">처음</a> · <a href="/terms">이용약관</a> · <a href="/privacy">개인정보 처리방침</a></footer></body></html>`;
 
 export const csrfField = (csrf: string) => `<input type="hidden" name="csrf" value="${esc(csrf)}">`;
