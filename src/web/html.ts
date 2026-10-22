@@ -20,6 +20,7 @@ nav a{color:var(--mute);text-decoration:none}nav a::before{content:"[";color:var
 label{display:block;margin:.75rem 0}
 input,textarea,select{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:2px;padding:.4rem .6rem;max-width:100%}
 input[type=checkbox],input[type=radio]{accent-color:var(--acc)}
+input[type=number]{width:8rem}
 table{border-collapse:collapse;width:100%;background:var(--panel);border:1px solid var(--line)}
 td,th{border-bottom:1px dashed var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}th{font-family:var(--mono);color:var(--mute);font-weight:500;font-size:.8rem}
 button,.btn{display:inline-block;font-family:var(--mono);font-size:.88rem;font-weight:600;padding:.55rem 1rem;min-height:44px;color:var(--acc);border:1px solid var(--acc);border-radius:2px;background:transparent;text-decoration:none;cursor:pointer;transition:background .15s,color .15s}
@@ -83,6 +84,14 @@ export const APP_JS = `document.addEventListener('click', (e) => {
     () => { b.textContent = '복사했습니다'; setTimeout(() => { b.textContent = label; }, 2000); },
     () => { const err = document.getElementById('copy-error'); if (err) err.hidden = false; },
   );
+});
+// 새 토론방: 고른 진행 방식의 설명과 기본값만 보인다
+document.addEventListener('change', (e) => {
+  if (e.target.name !== 'mode') return;
+  const m = e.target.value;
+  for (const el of document.querySelectorAll('[data-mode]')) el.hidden = el.dataset.mode !== m;
+  const max = document.querySelector('input[name=max_rounds]');
+  max.placeholder = max.dataset[m];
 });`;
 
 export const logoutForm = (csrf: string) =>
