@@ -1,9 +1,9 @@
 import type { Request, Response } from 'express';
 import { currentProposal, PARTICIPANTS, type Discussion, type Participant, type Turn } from '../db/discussions.js';
-import type { IssueChange, IssueLedger } from '../db/issues.js';
+import type { IssueChange, IssueLedger, IssueView } from '../db/issues.js';
 import { PARTICIPANT_NAME } from '../instructions.js';
 import { esc } from './html.js';
-import { issueChangeFlags, issueChangeText, ISSUE_ACTION_LABEL, ISSUE_STATUS_LABEL, renderMarkdown, STATUS_LABEL } from './markdown.js';
+import { issueChangeFlags, ISSUE_ACTION_LABEL, ISSUE_STATUS_LABEL, renderMarkdown, STATUS_LABEL, unresolvedLabel } from './markdown.js';
 import { cookieOptions, readCookie } from './session.js';
 
 // 토론 상세 화면의 조각(주장 상자·라운드 쟁점 박스)과 동시·순차 토론의 화면 방식 다섯 가지
@@ -11,11 +11,23 @@ import { cookieOptions, readCookie } from './session.js';
 export const formatTime = (d: Date | null) =>
   d ? new Date(d).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'medium', timeStyle: 'short' }) : '없음';
 
-// 쟁점 변경 한 줄. 반영 제안은 그 답변으로 가는 링크, 대기·충돌은 배지로 구분한다. 이월(미언급)은 표시하지 않는다
-function issueChangeItem(c: IssueChange, by = '') {
+// 쟁점 변경 한 건: "A석 I1 해결 처리 · 근거: …". 근거는 처리한 자리가 낸 것이지 양측의 합의 결론이 아니다.
+// 문구 수정은 이전 → 요청 문구, 반영 제안은 그 답변으로 가는 링크, 대기·충돌은 배지로 구분한다. 이월(미언급)은 표시하지 않는다.
+// 모든 화면이 이 표기를 쓴다. seat·ref는 자리나 쟁점이 이미 드러난 곳에서 뺀다
+function changeHtml(c: IssueChange, { seat = true, ref = true } = {}) {
+  const what =
+    c.action === 'open'
+      ? `${ISSUE_ACTION_LABEL.open}: ${c.text}`
+      : c.action === 'revise'
+        ? `${ISSUE_ACTION_LABEL.revise}: ${c.before?.title} → ${c.text}`
+        : `${ISSUE_ACTION_LABEL[c.action]} 처리`;
+  const head = `${seat ? `<b class="seat-${c.by}">${PARTICIPANT_NAME[c.by]}</b> ` : ''}${esc(`${ref ? `${c.ref ?? '새 쟁점'} ` : ''}${what}`)}`;
+  const note = c.note ? ` · 근거: ${esc(c.note)}` : '';
   const link = c.proposal_turn_id ? ` · 반영 제안 <a href="#t${esc(c.proposal_turn_id)}">#${esc(c.proposal_turn_id)}</a>` : '';
-  return `<li>${by ? `<b>${by}</b>` : ''}${esc(issueChangeText(c))}${link}${flagBadges(c)}</li>`;
+  return `${head}${note}${link}${flagBadges(c)}`;
 }
+
+const changeList = (cs: IssueChange[], opts?: Parameters<typeof changeHtml>[1]) => `<ul>${cs.map((c) => `<li>${changeHtml(c, opts)}</li>`).join('')}</ul>`;
 
 const flagBadges = (c: IssueChange) => issueChangeFlags(c).map((f) => ` <span class="badge">${f}</span>`).join('');
 
@@ -34,7 +46,7 @@ function turnBox(t: Turn, d: Discussion, changes: IssueChange[] = [], open = tru
   return `<details class="turn seat-${t.participant}"${anchor ? ` id="t${esc(t.id)}"` : ''}${pairAttr(t, d)}${open ? ' open' : ''}><summary><b>${PARTICIPANT_NAME[t.participant]}</b>${app} <small>#${esc(t.id)} · ${formatTime(t.created_at)}</small> ${badges}</summary>
     ${renderMarkdown(t.content)}
     ${t.proposal ? `<p><b>제안 #${esc(t.id)}</b></p>${renderMarkdown(t.proposal)}` : ''}
-    ${changes.length ? `<p>쟁점 변경</p><ul>${changes.map((c) => issueChangeItem(c)).join('')}</ul>` : ''}
+    ${changes.length ? `<p>쟁점 변경</p>${changeList(changes, { seat: false })}` : ''}
     ${t.open_issues.length ? `<p>구 형식 이견</p><ul>${t.open_issues.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</details>`;
 }
 
@@ -113,52 +125,70 @@ const pair = (x: Round, d: Discussion, anchor = true) => `<div class="cols">${PA
 
 const isClosing = (c: IssueChange) => c.after?.status !== 'open' && c.before?.status === 'open';
 
-// 라운드 끝 쟁점 상태: 쟁점마다 이 라운드까지 공개된 마지막 변경의 결과와 이 라운드에서 생긴 일.
-// 이 라운드에 반영된 문구 수정·재개와 종결한 변경(자리·근거)을 함께 두고, 두 자리가 다르게 바꿔 충돌했으면 표시한다
+// r(라운드·턴)까지 공개된 상태로 종결돼 있으면 그 종결 변경들. 같은 라운드에 양쪽이 함께 종결했으면 둘 다
+function closingAt(i: IssueView, r: number) {
+  const last = i.history.findLast((c) => c.turn <= r);
+  if (!last?.after || last.after.status === 'open') return [];
+  const at = i.history.findLast((c) => c.turn <= r && isClosing(c))?.turn;
+  return i.history.filter((c) => c.turn === at && isClosing(c));
+}
+
+// 라운드 끝 쟁점 상태: 쟁점마다 이 라운드까지 공개된 마지막 변경의 결과와 이 라운드의 변경(충돌 포함)
 function roundEnd(r: number, ledger: IssueLedger) {
   return ledger.issues.flatMap((i) => {
     const last = i.history.findLast((c) => c.turn <= r);
     if (!last?.after) return [];
-    const here = i.history.filter((c) => c.turn === r);
-    const mark = i.opened.turn === r ? '새로 열림' : here.some(isClosing) ? '이번 라운드 종결' : here.length ? '이번 라운드 변경' : '';
-    // 같은 라운드에 양쪽이 함께 종결했으면 두 근거를 모두 둔다
-    const closedAt = last.after.status === 'open' ? undefined : i.history.findLast((c) => c.turn <= r && isClosing(c))?.turn;
-    const closing = i.history.filter((c) => c.turn === closedAt && isClosing(c));
-    const edits = here.filter((c) => !c.conflict && (c.action === 'revise' || c.action === 'reopen'));
-    return [{ ref: i.ref, ...last.after, mark, details: [...edits, ...closing], conflict: here.some((c) => c.conflict) }];
+    return [{ ref: i.ref, ...last.after, opened: i.opened.turn === r, here: i.history.filter((c) => c.turn === r), closedAt: closingAt(i, r)[0]?.turn }];
   });
 }
+type RoundState = ReturnType<typeof roundEnd>[number];
 
-// 변경 한 줄: "A석 해결: 근거", "A석 문구 수정: 근거 (이전: 옛 문구)". 근거가 없으면 자리와 변경 종류만
-function detailLine(c: IssueChange) {
-  const before = c.action === 'revise' && c.before ? ` (이전: ${esc(c.before.title)})` : '';
-  return `<br><small>${PARTICIPANT_NAME[c.by]} ${ISSUE_ACTION_LABEL[c.action]}${c.note ? `: ${esc(c.note)}` : ''}${before}</small>`;
+// 이번 라운드에 바뀐 쟁점 한 건: 끝 상태, 라운드 전 → 후, 양쪽 요청과 근거·반영 제안. 충돌한 요청도 그대로 보인다
+function changedIssue(s: RoundState) {
+  const from = s.here[0].before?.status;
+  const conflict = s.here.some((c) => c.conflict);
+  const move = s.opened ? '새로 열림' : from && from !== s.status ? `${ISSUE_STATUS_LABEL[from]} → ${ISSUE_STATUS_LABEL[s.status]}` : '';
+  const why = conflict ? '두 자리의 요청이 달라 반영하지 않음' : '';
+  const line = [move, why].filter(Boolean).join(' · ');
+  return `<li><b>${esc(s.ref)}</b> ${esc(s.title)} <span class="badge">${ISSUE_STATUS_LABEL[s.status]}</span>${line ? `<br><small>이번 라운드: ${line}</small>` : ''}${changeList(s.here, { ref: false })}</li>`;
 }
 
-// 라운드 쟁점 박스: 라운드 끝 쟁점 상태와 이 라운드의 수정 내용·종결 결론.
-// 진행 중 라운드는 끝 상태가 아직 공개 전이므로 이번 라운드에 낸 (대기) 변경을 대신 보인다
-function roundIssueBox(x: Round, ledger: IssueLedger) {
+// 라운드 쟁점 내용. 화면 방식마다 배치만 다르고 내용은 같다.
+// 끝난 라운드: 이번에 바뀐 쟁점만 펼쳐 보이고, 라운드 끝 전체 상태는 접어 둔다(이전 라운드에 끝난 쟁점을 매번 되풀이하지 않는다).
+// 진행 중 라운드: 끝 상태는 공개 전이므로 직전 확정 상태 기준으로 이번에 낸(대기) 변경을 자리별로 보인다
+function roundIssues(x: Round, ledger: IssueLedger) {
   if (x.ongoing) {
     const changes = roundChanges(x, ledger);
-    const changeList = changes.length
-      ? `<ul>${changes.map((c) => issueChangeItem(c, `${PARTICIPANT_NAME[c.by]} `)).join('')}</ul>`
-      : '<p class="note">이 라운드에는 쟁점 변경이 없습니다.</p>';
-    return fold(`라운드 ${x.r} 쟁점`, `<p>이번 라운드 변경</p>${changeList}<p class="note">라운드 끝 상태는 라운드가 끝나면 공개됩니다.</p>`);
+    return `<p class="note">직전 라운드까지 확정된 상태 기준 · 이번 제출은 라운드가 끝나면 반영됩니다.</p>${
+      changes.length ? changeList(changes) : '<p class="note">이 라운드에는 아직 쟁점 변경이 없습니다.</p>'
+    }`;
   }
   const states = roundEnd(x.r, ledger);
-  const stateList = (title: string, items: typeof states) =>
+  const changed = states.filter((s) => s.here.length);
+  const open = states.filter((s) => s.status === 'open');
+  const closed = states.filter((s) => s.status !== 'open');
+  const brief = (title: string, items: RoundState[]) =>
     items.length
       ? `<p>${title}</p><ul>${items
-          .map(
-            (s) =>
-              `<li>${esc(`${s.ref} ${s.title}`)}${s.status !== 'open' ? ` <span class="badge">${ISSUE_STATUS_LABEL[s.status]}</span>` : ''}${s.mark ? ` <span class="badge ok">${s.mark}</span>` : ''}${s.conflict ? ' <span class="badge">충돌·미반영</span>' : ''}${s.details.map(detailLine).join('')}</li>`,
-          )
+          .map((s) => `<li>${esc(`${s.ref} ${s.title}`)}${s.status !== 'open' ? ` <span class="badge">${ISSUE_STATUS_LABEL[s.status]} · R${s.closedAt}</span>` : ''}</li>`)
           .join('')}</ul>`
       : '';
-  const stateHtml =
-    stateList('열린 쟁점', states.filter((s) => s.status === 'open')) + stateList('종결된 쟁점', states.filter((s) => s.status !== 'open')) ||
-    '<p class="note">쟁점이 없습니다.</p>';
-  return fold(`라운드 ${x.r} 쟁점`, `<p>라운드 끝 상태</p>${stateHtml}`);
+  return `<p>이번 라운드 변경 ${changed.length}건 · 종료 시 열림 ${open.length}건</p>${
+    changed.length ? `<ul>${changed.map(changedIssue).join('')}</ul>` : '<p class="note">이 라운드에는 쟁점 변경이 없습니다.</p>'
+  }${states.length ? `<details class="more"><summary>이 라운드 종료 시 전체 상태</summary>${brief('열린 쟁점', open)}${brief('종결된 쟁점', closed)}</details>` : ''}`;
+}
+
+const roundIssueBox = (x: Round, ledger: IssueLedger) => fold(`라운드 ${x.r} 쟁점`, roundIssues(x, ledger));
+
+// 토론 전체 쟁점 한 건: 상태·개설과, 종결했으면 종결 라운드(턴)에 처리한 자리마다 근거·반영 제안. 전체 이력은 접어 둔다
+export function issueItem(d: Discussion, i: IssueView) {
+  const unit = d.mode === 'parallel' ? '라운드' : '턴';
+  const closing = closingAt(i, Infinity);
+  const status = `${ISSUE_STATUS_LABEL[i.status]}${closing.length ? ` · ${unit} ${closing[0].turn}` : ''}${i.unresolved_at_end ? ` · ${unresolvedLabel(d)}` : ''}`;
+  const history = i.history.map((c) => `<li>${unit} ${c.turn} · ${changeHtml(c, { ref: false })}</li>`).join('');
+  return `<li><b>${esc(i.ref)}</b> ${esc(i.title)} <span class="badge">${status}</span> <small>${unit} ${i.opened.turn} ${PARTICIPANT_NAME[i.opened.by]} 개설</small>${
+    closing.length ? changeList(closing, { ref: false }) : ''
+  }<details class="more"><summary>변경 이력 ${i.history.length}건</summary><ul>${history}</ul></details></li>`;
 }
 
 // 진행 중이면 이번 라운드에 아직 안 낸 자리, 끝났으면 상태
@@ -254,7 +284,7 @@ function viewB(p: ViewPage) {
     </div></div>`;
 }
 
-// C · 표: 라운드를 행, A석·B석·쟁점 변경을 열로. 주장은 한 줄 요약만 보이고 눌러야 본문이 열린다
+// C · 표: 라운드를 행, A석·B석·쟁점을 열로. 주장은 한 줄 요약만 보이고 눌러야 본문이 열린다
 function viewC(p: ViewPage) {
   const { d, turns, ledger } = p;
   const cell = (x: Round, s: Participant) => {
@@ -264,15 +294,10 @@ function viewC(p: ViewPage) {
       t.proposal ? `<p><b>제안 #${esc(t.id)}</b></p>${renderMarkdown(t.proposal)}` : ''
     }</details>${t.agreement ? `<span class="badge">${esc(t.agreement)}</span>` : ''}${t.sign ? ' <span class="badge ok">사인</span>' : ''}`;
   };
-  const issueCell = (x: Round) => {
-    const lines = roundChanges(x, ledger).map((c) => `<div><b class="seat-${c.by}">${c.by}</b> ${esc(issueChangeText(c))}${flagBadges(c)}</div>`);
-    const open = roundEnd(x.r, ledger).filter((s) => s.status === 'open').map((s) => s.ref);
-    return `${lines.join('') || '<small>변경 없음</small>'}<div class="end">→ ${x.ongoing ? '공개 전' : open.length ? `열림 ${esc(open.join(' '))}` : '열린 쟁점 없음'}</div>`;
-  };
   const rows = roundsOf(d, turns)
     .map((x) => {
       const c = x.ongoing ? ' class="cur"' : '';
-      return `<tr${c}><th scope="row">R${x.r}${roundBadges(x)}</th><td>${cell(x, 'A')}</td><td>${cell(x, 'B')}</td><td>${issueCell(x)}</td></tr>`;
+      return `<tr${c}><th scope="row">R${x.r}${roundBadges(x)}</th><td>${cell(x, 'A')}</td><td>${cell(x, 'B')}</td><td>${roundIssues(x, ledger)}</td></tr>`;
     })
     .join('');
   return `${p.head}
@@ -281,7 +306,7 @@ function viewC(p: ViewPage) {
     }</span></p>
     ${proposalBox(p)}
     <h2>기록</h2>
-    ${rows ? `<div class="pv-table"><table><thead><tr><th>R</th><th>A석</th><th>B석</th><th>쟁점 변경 → 끝 상태</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p>아직 제출이 없습니다.</p>'}
+    ${rows ? `<div class="pv-table"><table><thead><tr><th>R</th><th>A석</th><th>B석</th><th>쟁점</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p>아직 제출이 없습니다.</p>'}
     ${fold('쟁점', p.issues)}
     ${extrasBox(p)}`;
 }
@@ -310,24 +335,16 @@ function viewD(p: ViewPage) {
     </div>`;
 }
 
-// E · 타임라인: 가운데 축에 라운드를 찍고 A석은 왼쪽, B석은 오른쪽. 쟁점 변경은 두 주장 사이 축 위의 칩으로
+// E · 타임라인: 가운데 축에 라운드를 찍고 A석은 왼쪽, B석은 오른쪽. 라운드 쟁점은 두 주장 사이 축 위의 카드로
 function viewE(p: ViewPage) {
   const { d, turns, ledger } = p;
   const rounds = roundsOf(d, turns);
   const body = rounds
     .map((x, i) => {
       const last = i === rounds.length - 1;
-      const chips = roundChanges(x, ledger).map(
-        (c) =>
-          `<span class="chip${c.conflict ? ' cf' : c.action === 'resolve' && !c.pending ? ' res' : ''}"><b class="seat-${c.by}">${c.by}</b> ${esc(issueChangeText(c))}${flagBadges(c)}</span>`,
-      );
-      const end = roundEnd(x.r, ledger);
-      const endText = x.ongoing
-        ? ''
-        : `<span class="note">끝: 열림 ${esc(end.filter((s) => s.status === 'open').map((s) => s.ref).join(' ') || '없음')}</span>`;
       return `<div class="node${x.ongoing ? ' now' : ''}"><span>ROUND ${x.r}</span>${roundBadges(x)}</div>
         <div class="cols">${PARTICIPANTS.map((s) => seatCell(x, s, d, last)).join('')}</div>
-        <div class="chips">${chips.join('')}${endText}</div>`;
+        <div class="chips"><div class="chip ri">${roundIssues(x, ledger)}</div></div>`;
     })
     .join('');
   return `${p.head}
@@ -471,7 +488,7 @@ function seqC(p: ViewPage) {
   const current = currentProposal(turns);
   const rows = turns
     .map((t) => {
-      const lines = seqChanges(t, ledger).map((c) => `<div>${esc(issueChangeText(c))}${flagBadges(c)}</div>`);
+      const lines = seqChanges(t, ledger).map((c) => `<div>${changeHtml(c, { seat: false })}</div>`);
       const open = openAfter(t.round, ledger);
       return `<tr><th scope="row">${t.round}</th><td><b class="seat-${t.participant}">${PARTICIPANT_NAME[t.participant]}</b></td>
         <td><details id="t${esc(t.id)}"><summary><small>#${esc(t.id)}</small> ${t.proposal ? '<b>제안</b> ' : ''}${esc(plain(t.proposal ?? t.content))}</summary>${renderMarkdown(t.content)}${
@@ -536,7 +553,7 @@ function seqE(p: ViewPage) {
   const body = turns
     .map((t, i) => {
       const chips = seqChanges(t, ledger).map(
-        (c) => `<span class="chip${c.conflict ? ' cf' : c.action === 'resolve' ? ' res' : ''}"><b class="seat-${c.by}">${c.by}</b> ${esc(issueChangeText(c))}${flagBadges(c)}</span>`,
+        (c) => `<span class="chip${c.conflict ? ' cf' : c.action === 'resolve' ? ' res' : ''}">${changeHtml(c)}</span>`,
       );
       return `<div class="sq-msg seat-${t.participant}"><div class="no">TURN ${t.round}</div>${turnBox(t, d, [], i >= turns.length - 2)}</div>${
         chips.length ? `<div class="chips">${chips.join('')}</div>` : ''
@@ -598,6 +615,7 @@ details.extras>summary::before{content:"▸";font-family:var(--mono);color:var(-
 .pv-side a:hover{color:var(--acc)}.pv-side a[aria-current]{border-left-color:var(--acc);background:var(--hl);color:var(--acc)}
 .pv-side ul{list-style:none;padding:0;margin:0}.pv-side li{padding:.1rem 0}.pv-side li.closed{color:var(--mute)}
 .pv-anchor{scroll-margin-top:1rem}
+details.more>summary{cursor:pointer;color:var(--mute);font-size:.85rem}
 .pv-kv{display:flex;flex-wrap:wrap;gap:.2rem 1.4rem;background:var(--panel);border:1px solid var(--line);padding:.5rem .8rem;font-size:.88rem}
 .pv-kv b{font-family:var(--mono);font-weight:400;font-size:.78rem;color:var(--mute);margin-right:.35rem}
 .pv-table{overflow-x:auto}.pv-table table{font-size:.88rem;table-layout:fixed;min-width:40rem}
@@ -621,7 +639,7 @@ ${range(MAX_ROUNDS_CSS).map((n) => `#pv-r${n}:checked~.pv-r${n}`).join(',')}{dis
 .pv-line .cols{gap:3rem;position:relative}.pv-line .turn{margin:0}
 .pv-line .chips{position:relative;display:flex;flex-direction:column;align-items:center;gap:.3rem;margin:.7rem 0}
 .pv-line .chip{background:var(--panel);border:1px solid var(--line);font-size:.82rem;padding:.15rem .6rem;max-width:34rem;text-align:center}
-.pv-line .chip.res{border-color:var(--acc)}.pv-line .chip.cf{border-color:var(--b)}.pv-line .chips .note{background:var(--bg);padding:0 .4rem}
+.pv-line .chip.ri{text-align:left;width:100%;max-width:none;font-size:.88rem;padding:.4rem .8rem}.pv-line .chip.res{border-color:var(--acc)}.pv-line .chip.cf{border-color:var(--b)}.pv-line .chips .note{background:var(--bg);padding:0 .4rem}
 .sq-next{border-style:dashed;color:inherit}.sq-no{font-family:var(--mono);font-size:.75rem;color:var(--mute);margin:.9rem 0 -.3rem}.sq-flow{display:flex;flex-wrap:wrap;align-items:center;gap:.3rem .5rem}.sq-flow>span{font-family:var(--mono);color:var(--mute)}
 .sq-table th:nth-child(2){width:4.5rem}.sq-table th:last-child{width:32%}
 .pv-rounds>label.sq-step{border-top-width:3px}.pv-rounds>label.seat-A{border-top-color:var(--acc)}.pv-rounds>label.seat-B{border-top-color:var(--b)}
