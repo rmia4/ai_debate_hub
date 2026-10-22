@@ -245,6 +245,7 @@ function newForm(csrf: string, values: Record<string, unknown> = {}, error = '',
       <label>최대 라운드(동시 2~10, 기본 5) 또는 최대 턴(순차 4~20, 기본 10)<br><input name="max_rounds" type="number" min="2" max="20" value="${v('max_rounds')}"></label>
       <label>최소 라운드 (동시 방식만, 기본 2)<br><input name="min_rounds" type="number" min="2" max="10" value="${v('min_rounds')}"></label>
       <button type="submit">토론방 만들기</button>
+      <a class="btn" href="${esc(choice ? projectHome(choice.project.id) : '/app')}">취소</a>
     </form>`;
 }
 
