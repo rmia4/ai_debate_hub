@@ -143,7 +143,7 @@ function roundIssueBox(x: Round, ledger: IssueLedger) {
     ? '<p class="note">라운드가 끝나면 공개됩니다.</p>'
     : stateList('열린 쟁점', states.filter((s) => s.status === 'open')) + stateList('종결된 쟁점', states.filter((s) => s.status !== 'open')) ||
       '<p class="note">쟁점이 없습니다.</p>';
-  return `<div class="box"><span class="lbl">라운드 ${x.r} 쟁점</span><p>이번 라운드 변경</p>${changeList}<p>라운드 끝 상태</p>${stateHtml}</div>`;
+  return fold(`라운드 ${x.r} 쟁점`, `<p>이번 라운드 변경</p>${changeList}<p>라운드 끝 상태</p>${stateHtml}`);
 }
 
 // 진행 중이면 이번 라운드에 아직 안 낸 자리, 끝났으면 상태
@@ -165,14 +165,18 @@ const closedIssues = (ledger: IssueLedger) => ledger.issues.filter((i) => i.stat
 
 // 자리별 최신 제안. 합의로 끝났으면 상세 화면의 결론을 그대로 쓴다
 function proposalBox(p: ViewPage) {
-  if (p.d.status !== 'active') return `<div class="box"><span class="lbl">결론</span>${p.conclusion}</div>`;
+  if (p.d.status !== 'active') return fold('결론', p.conclusion);
   const latest = PARTICIPANTS.map((s) => p.turns.findLast((t) => t.participant === s && t.proposal)).filter((t) => t !== undefined);
-  return `<div class="box"><span class="lbl">최신 제안</span>${
+  return fold(
+    '최신 제안',
     latest.length
       ? latest.map((t) => `<p><b class="seat-${t.participant}">${PARTICIPANT_NAME[t.participant]}</b> <a href="#t${esc(t.id)}">#${esc(t.id)}</a> <small>라운드 ${t.round}</small></p>${renderMarkdown(t.proposal!)}`).join('')
-      : '<p class="note">아직 제안이 없습니다.</p>'
-  }</div>`;
+      : '<p class="note">아직 제안이 없습니다.</p>',
+  );
 }
+
+// 결론·쟁점 상자: 테두리 위 라벨을 눌러 접고 편다. 처음엔 펼친 상태
+const fold = (label: string, body: string) => `<details class="box fold" open><summary class="lbl">${label}</summary>${body}</details>`;
 
 const extrasBox = (p: ViewPage) =>
   `<details class="box extras"${p.extrasOpen ? ' open' : ''}><summary>배경·참여 방법·관리</summary>${p.extras}</details>`;
@@ -194,7 +198,7 @@ function viewA(p: ViewPage) {
       <div><span class="k">ISSUES</span><b>열림 ${openIssues(ledger).length}</b> <small>· 종결 ${closedIssues(ledger).length}</small></div>
     </div>
     ${proposalBox(p)}
-    <div class="box"><span class="lbl">쟁점</span>${p.issues}</div>
+    ${fold('쟁점', p.issues)}
     <h2>기록</h2>
     ${rounds.length ? '' : '<p>아직 제출이 없습니다.</p>'}
     ${rounds
@@ -230,7 +234,7 @@ function viewB(p: ViewPage) {
       ${d.status === 'active' ? '' : proposalBox(p)}
       ${rounds.length ? '' : '<p>아직 제출이 없습니다.</p>'}
       ${rounds.map((x) => `<section class="pv-anchor" id="r${x.r}"><h3>라운드 ${x.r}${roundBadges(x)}</h3>${pair(x, d)}${roundIssueBox(x, ledger)}</section>`).join('')}
-      <h2>쟁점</h2>${p.issues}
+      ${fold('쟁점', p.issues)}
       ${extrasBox(p)}
     </div></div>`;
 }
@@ -263,7 +267,7 @@ function viewC(p: ViewPage) {
     ${proposalBox(p)}
     <h2>기록</h2>
     ${rows ? `<div class="pv-table"><table><thead><tr><th>R</th><th>A석</th><th>B석</th><th>쟁점 변경 → 끝 상태</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p>아직 제출이 없습니다.</p>'}
-    <h2>쟁점</h2>${p.issues}
+    ${fold('쟁점', p.issues)}
     ${extrasBox(p)}`;
 }
 
@@ -315,7 +319,7 @@ function viewE(p: ViewPage) {
     <p>${statusBadge(d)} 라운드 ${d.current_round}/${d.max_rounds} · <b>${turnText(d, turns)}</b> · 열린 쟁점 ${esc(openIssues(ledger).map((i) => i.ref).join(' ') || '없음')}</p>
     <div class="pv-line">${body || '<p>아직 제출이 없습니다.</p>'}</div>
     ${proposalBox(p)}
-    <h2>쟁점</h2>${p.issues}
+    ${fold('쟁점', p.issues)}
     ${extrasBox(p)}`;
 }
 
@@ -366,16 +370,19 @@ const noTurns = '<p>아직 제출이 없습니다.</p>';
 
 // 현재 합의안(마지막 제안)과 사인 상태. 양쪽이 연속으로 사인하면 합의다. 끝났으면 결론
 function seqProposalBox(p: ViewPage) {
-  if (p.d.status !== 'active') return `<div class="box"><span class="lbl">결론</span>${p.conclusion}</div>`;
+  if (p.d.status !== 'active') return fold('결론', p.conclusion);
   const current = currentProposal(p.turns);
-  if (!current) return '<div class="box"><span class="lbl">현재 합의안</span><p class="note">아직 제안이 없습니다.</p></div>';
+  if (!current) return fold('현재 합의안', '<p class="note">아직 제안이 없습니다.</p>');
   const last = p.turns.at(-1)!;
   const next = nextSeat(p.d, p.turns);
   const note = last.sign
     ? `${PARTICIPANT_NAME[last.participant]} 턴 ${last.round}에 사인 · ${next ? PARTICIPANT_NAME[next] : '상대'}가 이어서 사인하면 합의`
     : '아직 사인 없음 · 양쪽이 연속으로 사인하면 합의';
-  return `<div class="box"><span class="lbl">현재 합의안 #${esc(current.id)}</span><p><b class="seat-${current.participant}">${PARTICIPANT_NAME[current.participant]}</b> <a href="#t${esc(current.id)}">턴 ${current.round}</a></p>${renderMarkdown(current.proposal!)}
-    <p class="note">${note}</p></div>`;
+  return fold(
+    `현재 합의안 #${esc(current.id)}`,
+    `<p><b class="seat-${current.participant}">${PARTICIPANT_NAME[current.participant]}</b> <a href="#t${esc(current.id)}">턴 ${current.round}</a></p>${renderMarkdown(current.proposal!)}
+    <p class="note">${note}</p>`,
+  );
 }
 
 // A · 정보 위계: 현황 4칸·현재 합의안·제안 흐름·쟁점을 위에, 기록은 최신 턴부터(마지막 주고받기 2턴만 펼침)
@@ -397,7 +404,7 @@ function seqA(p: ViewPage) {
             .join(' <span>→</span> ')}</p></div>`
         : ''
     }
-    <div class="box"><span class="lbl">쟁점</span>${p.issues}</div>
+    ${fold('쟁점', p.issues)}
     <h2>기록</h2>${d.status === 'active' ? `<div class="sq-no">TURN ${d.current_round}</div>` : ''}${nextBox(d, turns)}
     ${turns.length ? [...turns].reverse().map((t, i) => `<div class="sq-no">TURN ${t.round}</div>${seqTurn(t, p, i < 2)}`).join('') : noTurns}
     ${extrasBox(p)}`;
@@ -437,7 +444,7 @@ function seqB(p: ViewPage) {
       ${seqProposalBox(p)}
       ${turns.length ? turns.map((t) => `<h3>턴 ${t.round}</h3>${seqTurn(t, p)}`).join('') : noTurns}
       ${d.status === 'active' ? `<h3 id="sq-next" class="pv-anchor">턴 ${d.current_round}</h3>${nextBox(d, turns)}` : ''}
-      <h2>쟁점</h2>${p.issues}
+      ${fold('쟁점', p.issues)}
       ${extrasBox(p)}
     </div></div>`;
 }
@@ -473,7 +480,7 @@ function seqC(p: ViewPage) {
         ? `<div class="pv-table sq-table"><table><thead><tr><th>턴</th><th>자리</th><th>요약</th><th>쟁점 변경 → 열린 쟁점</th></tr></thead><tbody>${rows}${nextRow}</tbody></table></div>`
         : noTurns
     }
-    <h2>쟁점</h2>${p.issues}
+    ${fold('쟁점', p.issues)}
     ${extrasBox(p)}`;
 }
 
@@ -531,7 +538,7 @@ function seqE(p: ViewPage) {
     }</p>
     <div class="sq-chat">${body || noTurns}${waiting}</div>
     ${seqProposalBox(p)}
-    <h2>쟁점</h2>${p.issues}
+    ${fold('쟁점', p.issues)}
     ${extrasBox(p)}`;
 }
 
@@ -545,6 +552,11 @@ const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
 export const VIEW_STYLE = `.box{position:relative;background:var(--panel);border:1px solid var(--line);padding:1.1rem 1rem .7rem;margin:1.3rem 0;overflow-wrap:anywhere}
 .box>.lbl{position:absolute;top:-.75rem;left:.7rem;background:var(--bg);padding:0 .4rem;font-family:var(--mono);font-size:.8rem;color:var(--acc);font-weight:600}
 .box h3:first-child{margin-top:0}
+details.fold>summary.lbl{cursor:pointer;list-style:none;display:flex;align-items:center;gap:.3rem}
+details.fold>summary.lbl::-webkit-details-marker{display:none}
+details.fold>summary.lbl::before{content:"▾";font-weight:400;color:var(--mute)}details.fold:not([open])>summary.lbl::before{content:"▸"}
+details.fold>summary.lbl:hover::before{color:var(--acc)}
+details.fold:not([open]){padding:.4rem 1rem 0;min-height:1.2rem}
 .seat-A{color:var(--acc)}.seat-B{color:var(--b)}.turn.seat-A,.turn.seat-B{color:inherit}
 .badge.b{color:var(--b)}
 .pv-meta{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.4rem 1rem}.pv-meta>p{margin:0}
