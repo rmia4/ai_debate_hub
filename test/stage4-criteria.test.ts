@@ -139,6 +139,24 @@ describe('토론 화면', () => {
     expect(JSON.stringify(state.data)).not.toContain('진행 중 라운드의 클로드 답변');
   });
 
+  it('동시 토론 화면 방식은 기본이 A이고, 고른 방식은 쿠키로 기억하며 잘못된 값은 무시한다', async () => {
+    const u = await user(true);
+    const { id } = await webCreate(u);
+    await tool(u.claude, 'submit', { discussion_id: id, expected_round: 1, content: '화면 방식 확인용 답변', proposal: '안 A' });
+
+    const current = (html: string) => /<option value="(\w)" selected>/.exec(html)?.[1];
+    expect(current(await (await u.get(`/app/d/${id}`)).text())).toBe('a');
+    for (const v of ['b', 'c', 'd', 'e', 'a']) {
+      const html = await (await u.get(`/app/d/${id}?view=${v}`)).text();
+      expect(current(html)).toBe(v);
+      expect(html).toContain('화면 방식 확인용 답변');
+      expect(html).toContain('아직 제출 안 함');
+    }
+    await u.get(`/app/d/${id}?view=c`);
+    expect(current(await (await u.get(`/app/d/${id}`)).text())).toBe('c');
+    expect(current(await (await u.get(`/app/d/${id}?view=toString`)).text())).toBe('c');
+  });
+
   it('목록은 진행 중 토론의 차례를 보여 주고, 프로젝트·진행 중·종료 탭으로 거를 수 있다', async () => {
     const u = await user(true);
     const pid = /^\/app\?project=(.+)$/.exec((await u.post('/app/projects/new', { name: '목록 프로젝트' })).headers.get('location') ?? '')?.[1];

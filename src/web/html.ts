@@ -36,6 +36,9 @@ dialog{background:var(--panel);color:var(--fg);border:1px solid var(--line);max-
 .warn{background:var(--panel);border:1px solid var(--b);padding:.75rem 1rem}
 .cols{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
 .turn{background:var(--panel);border:1px solid var(--line);padding:.5rem .9rem;margin:.5rem 0;overflow-wrap:anywhere}
+details.turn>summary{color:var(--fg);min-height:44px;display:flex;flex-wrap:wrap;align-items:center;gap:0 .4rem;list-style:none}
+details.turn>summary::-webkit-details-marker{display:none}
+details.turn>summary::before{content:"▸";font-family:var(--mono);color:var(--mute)}details.turn[open]>summary::before{content:"▾"}
 .turn.seat-A{border-top:3px solid var(--acc)}.turn.seat-B{border-top:3px solid var(--b)}
 .badge{display:inline-block;font-family:var(--mono);font-size:.8em;color:var(--mute)}.badge::before{content:"["}.badge::after{content:"]"}
 .badge.ok{color:var(--acc)}
@@ -106,8 +109,16 @@ export const APP_JS = `document.addEventListener('click', (e) => {
     () => { const err = document.getElementById('copy-error'); if (err) err.hidden = false; },
   );
 });
+// 동시 토론: 같은 라운드(data-pair)의 주장을 함께 접고 편다. toggle은 버블링되지 않아 캡처로 받는다
+document.addEventListener('toggle', (e) => {
+  const key = e.target.dataset?.pair;
+  if (!key) return;
+  for (const el of document.querySelectorAll(\`details[data-pair="\${key}"]\`)) if (el.open !== e.target.open) el.open = e.target.open;
+}, true);
 // 새 토론방: 고른 진행 방식의 설명과 기본값만 보인다
 document.addEventListener('change', (e) => {
+  // 동시 토론 화면 보기 설정: 고르면 바로 그 방식으로 다시 연다
+  if (e.target.matches('select[data-autosubmit]')) return e.target.form.submit();
   if (e.target.name !== 'mode') return;
   const m = e.target.value;
   for (const el of document.querySelectorAll('[data-mode]')) el.hidden = el.dataset.mode !== m;
