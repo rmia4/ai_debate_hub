@@ -3,7 +3,7 @@ import { currentProposal, PARTICIPANTS, type Discussion, type Participant, type 
 import type { IssueChange, IssueLedger } from '../db/issues.js';
 import { PARTICIPANT_NAME } from '../instructions.js';
 import { esc } from './html.js';
-import { issueChangeFlags, issueChangeText, ISSUE_STATUS_LABEL, renderMarkdown, STATUS_LABEL } from './markdown.js';
+import { issueChangeFlags, issueChangeText, ISSUE_ACTION_LABEL, ISSUE_STATUS_LABEL, renderMarkdown, STATUS_LABEL } from './markdown.js';
 import { cookieOptions, readCookie } from './session.js';
 
 // 토론 상세 화면의 조각(주장 상자·라운드 쟁점 박스)과 동시·순차 토론의 화면 방식 다섯 가지
@@ -111,39 +111,54 @@ function seatCell(x: Round, p: Participant, d: Discussion, open = true, anchor =
 
 const pair = (x: Round, d: Discussion, anchor = true) => `<div class="cols">${PARTICIPANTS.map((p) => seatCell(x, p, d, true, anchor)).join('')}</div>`;
 
-// 라운드 끝 쟁점 상태: 쟁점마다 이 라운드까지 공개된 마지막 변경의 결과와 이 라운드에서 생긴 일
+const isClosing = (c: IssueChange) => c.after?.status !== 'open' && c.before?.status === 'open';
+
+// 라운드 끝 쟁점 상태: 쟁점마다 이 라운드까지 공개된 마지막 변경의 결과와 이 라운드에서 생긴 일.
+// 이 라운드에 반영된 문구 수정·재개와 종결한 변경(자리·근거)을 함께 두고, 두 자리가 다르게 바꿔 충돌했으면 표시한다
 function roundEnd(r: number, ledger: IssueLedger) {
   return ledger.issues.flatMap((i) => {
     const last = i.history.findLast((c) => c.turn <= r);
     if (!last?.after) return [];
     const here = i.history.filter((c) => c.turn === r);
-    const mark =
-      i.opened.turn === r ? '새로 열림' : here.some((c) => c.after?.status !== 'open' && c.before?.status === 'open') ? '이번 라운드 종결' : here.length ? '이번 라운드 변경' : '';
-    return [{ ref: i.ref, ...last.after, mark }];
+    const mark = i.opened.turn === r ? '새로 열림' : here.some(isClosing) ? '이번 라운드 종결' : here.length ? '이번 라운드 변경' : '';
+    // 같은 라운드에 양쪽이 함께 종결했으면 두 근거를 모두 둔다
+    const closedAt = last.after.status === 'open' ? undefined : i.history.findLast((c) => c.turn <= r && isClosing(c))?.turn;
+    const closing = i.history.filter((c) => c.turn === closedAt && isClosing(c));
+    const edits = here.filter((c) => !c.conflict && (c.action === 'revise' || c.action === 'reopen'));
+    return [{ ref: i.ref, ...last.after, mark, details: [...edits, ...closing], conflict: here.some((c) => c.conflict) }];
   });
 }
 
-// 라운드 쟁점 박스: 이번 라운드에 양쪽이 낸 변경과 라운드 끝 쟁점 상태. 진행 중 라운드의 끝 상태는 아직 공개 전이다
+// 변경 한 줄: "A석 해결: 근거", "A석 문구 수정: 근거 (이전: 옛 문구)". 근거가 없으면 자리와 변경 종류만
+function detailLine(c: IssueChange) {
+  const before = c.action === 'revise' && c.before ? ` (이전: ${esc(c.before.title)})` : '';
+  return `<br><small>${PARTICIPANT_NAME[c.by]} ${ISSUE_ACTION_LABEL[c.action]}${c.note ? `: ${esc(c.note)}` : ''}${before}</small>`;
+}
+
+// 라운드 쟁점 박스: 라운드 끝 쟁점 상태와 이 라운드의 수정 내용·종결 결론.
+// 진행 중 라운드는 끝 상태가 아직 공개 전이므로 이번 라운드에 낸 (대기) 변경을 대신 보인다
 function roundIssueBox(x: Round, ledger: IssueLedger) {
-  const changes = roundChanges(x, ledger);
-  const changeList = changes.length
-    ? `<ul>${changes.map((c) => issueChangeItem(c, `${PARTICIPANT_NAME[c.by]} `)).join('')}</ul>`
-    : '<p class="note">이 라운드에는 쟁점 변경이 없습니다.</p>';
+  if (x.ongoing) {
+    const changes = roundChanges(x, ledger);
+    const changeList = changes.length
+      ? `<ul>${changes.map((c) => issueChangeItem(c, `${PARTICIPANT_NAME[c.by]} `)).join('')}</ul>`
+      : '<p class="note">이 라운드에는 쟁점 변경이 없습니다.</p>';
+    return fold(`라운드 ${x.r} 쟁점`, `<p>이번 라운드 변경</p>${changeList}<p class="note">라운드 끝 상태는 라운드가 끝나면 공개됩니다.</p>`);
+  }
   const states = roundEnd(x.r, ledger);
   const stateList = (title: string, items: typeof states) =>
     items.length
       ? `<p>${title}</p><ul>${items
           .map(
             (s) =>
-              `<li>${esc(`${s.ref} ${s.title}`)}${s.status !== 'open' ? ` <span class="badge">${ISSUE_STATUS_LABEL[s.status]}</span>` : ''}${s.mark ? ` <span class="badge ok">${s.mark}</span>` : ''}</li>`,
+              `<li>${esc(`${s.ref} ${s.title}`)}${s.status !== 'open' ? ` <span class="badge">${ISSUE_STATUS_LABEL[s.status]}</span>` : ''}${s.mark ? ` <span class="badge ok">${s.mark}</span>` : ''}${s.conflict ? ' <span class="badge">충돌·미반영</span>' : ''}${s.details.map(detailLine).join('')}</li>`,
           )
           .join('')}</ul>`
       : '';
-  const stateHtml = x.ongoing
-    ? '<p class="note">라운드가 끝나면 공개됩니다.</p>'
-    : stateList('열린 쟁점', states.filter((s) => s.status === 'open')) + stateList('종결된 쟁점', states.filter((s) => s.status !== 'open')) ||
-      '<p class="note">쟁점이 없습니다.</p>';
-  return fold(`라운드 ${x.r} 쟁점`, `<p>이번 라운드 변경</p>${changeList}<p>라운드 끝 상태</p>${stateHtml}`);
+  const stateHtml =
+    stateList('열린 쟁점', states.filter((s) => s.status === 'open')) + stateList('종결된 쟁점', states.filter((s) => s.status !== 'open')) ||
+    '<p class="note">쟁점이 없습니다.</p>';
+  return fold(`라운드 ${x.r} 쟁점`, `<p>라운드 끝 상태</p>${stateHtml}`);
 }
 
 // 진행 중이면 이번 라운드에 아직 안 낸 자리, 끝났으면 상태
