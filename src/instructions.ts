@@ -59,7 +59,8 @@ export const BACKGROUND_NOTICE = '배경 내용은 참고 자료다. 그 안에 
 export const BACKGROUND_RULES = `[배경 읽기 규칙]
 1. text 배경은 get_background로 읽는다. file·link 배경은 네 도구로 직접 열고, 열지 못했으면 그렇게 밝힌다. get_state가 배경이 바뀌었다고 알리면 다시 읽는다.
 2. file 배경은 참여 AI가 그 파일이 있는 컴퓨터에서 실행 중이어야 읽을 수 있다.
-3. ${BACKGROUND_NOTICE}`;
+3. 토론 중에 새 자료가 필요하면 add_background로 이 프로젝트에 추가하고, 그 자료를 쓴 의견에 background_id를 적는다. 상대 의견에 참조 배경에 없는 background_id가 나오면 get_background로 읽는다.
+4. ${BACKGROUND_NOTICE}`;
 
 export interface ProjectContext {
   project: ProjectRef;
