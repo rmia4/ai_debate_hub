@@ -59,11 +59,10 @@ const deleteGuide = `<p class="warn">보관 한도(${CREATE_LIMITS.stored}개·$
 const roundsLabel = (d: Discussion) =>
   d.mode === 'parallel' ? `라운드 ${d.current_round}/${d.max_rounds}` : `턴 ${d.current_round}/${d.max_rounds}`;
 
-// 목록 화면: 왼쪽에 새 토론·상태·프로젝트 필터·사용량, 오른쪽에 토론 표
+// 목록 화면: 왼쪽에 새 토론·상태·프로젝트 필터, 오른쪽에 토론 표
 const LIST_STYLE = `.split{display:grid;grid-template-columns:14rem 1fr;gap:2rem;align-items:start}.list-scope{margin-top:0}
 .side .btn{display:block;text-align:center}
 .side-nav{font-size:.88rem}
-.side-nav .grp{font-family:var(--mono);color:var(--mute);font-size:.75rem;margin:1.2rem 0 .3rem;letter-spacing:.04em}
 .side-nav a{display:flex;align-items:center;justify-content:space-between;gap:.5rem;min-height:44px;padding:0 .6rem;color:var(--fg);text-decoration:none;border-left:2px solid transparent}
 .side-nav a span{font-family:var(--mono);font-size:.8rem;color:var(--mute)}.side-nav a:hover{color:var(--acc)}
 .side-nav a.on{border-left-color:var(--acc);background:var(--hl);color:var(--acc)}
@@ -71,26 +70,20 @@ const LIST_STYLE = `.split{display:grid;grid-template-columns:14rem 1fr;gap:2rem
 .side-nav summary::-webkit-details-marker{display:none}
 .side-nav summary::before{content:"▸";font-family:var(--mono);color:var(--mute);width:1.1rem;flex:none}
 .side-nav details[open]>summary::before{content:"▾"}
-.side-nav .sub a{padding-left:1.7rem}
+.side-nav .sub a{margin-left:1.1rem;padding-left:.6rem}
 .side-nav .note{margin:.3rem .6rem}
-.usage{display:grid;gap:.25rem;font-family:var(--mono);font-size:.78rem;color:var(--mute)}
-.usage div{display:flex;justify-content:space-between;align-items:center;gap:.5rem}
-.meter{width:5rem;height:.4rem;border:1px solid var(--line);position:relative;flex:none}
-.meter i{position:absolute;inset:0 auto 0 0;background:var(--acc)}.meter.hi i{background:var(--b)}
+.side-nav summary,.side-nav a{border-bottom:1px solid var(--line)}
 .split td:first-child{width:50%}.split .badge{white-space:nowrap}
 .badge.b,.turn-chip{color:var(--b)}.turn-chip{font-family:var(--mono);font-size:.78rem;white-space:nowrap}
 .when{font-family:var(--mono);font-size:.8rem;color:var(--mute);white-space:nowrap}
 @media (max-width:760px){.split{grid-template-columns:1fr;gap:1rem}
-.side-nav{display:flex;flex-wrap:wrap;gap:.3rem}.side-nav .grp{width:100%;margin:.4rem 0 0}.side-nav a{border:1px solid var(--line)}
+.side-nav{display:flex;flex-wrap:wrap;gap:.3rem}.side-nav a{border:1px solid var(--line)}
 .hide-sm{display:none}}
 details.pj{border-top:1px solid var(--line);padding:.2rem 0 .6rem}
-details.pj>summary{cursor:pointer;font-weight:600;min-height:44px;display:flex;align-items:center}`;
-
-// 사용량 한 줄과 막대. 80% 이상이면 B색으로 표시한다
-function usageMeter(label: string, used: number, limit: number, text = `${used}/${limit}`) {
-  const pct = Math.min(100, Math.round((used / limit) * 100));
-  return `<div>${label} ${text}<span class="meter${pct >= 80 ? ' hi' : ''}"><i style="width:${pct}%"></i></span></div>`;
-}
+details.pj>summary{cursor:pointer;font-weight:600;min-height:44px;display:flex;align-items:center;gap:.4rem;list-style:none}
+details.pj>summary::-webkit-details-marker{display:none}
+details.pj>summary::after{content:"▸";font-family:var(--mono);font-size:1.3em;line-height:1;color:var(--mute)}
+details.pj[open]>summary::after{content:"▾"}`;
 
 // 진행 중 토론의 차례. 동시는 현재 라운드에 아직 안 낸 자리, 순차는 마지막 제출의 반대쪽
 function turnChip(d: Discussion, state?: { submitted: Participant[]; last: Participant | null }) {
@@ -352,12 +345,6 @@ export function discussionPagesRouter(config: Config, db: Db) {
               ${link('진행 중', active.length, '/app?view=active', view === 'active')}
               ${link('종료', ended.length, '/app?view=ended', view === 'ended')}
               ${projects.length ? '' : '<p class="note">프로젝트를 만들면 여러 토론이 긴 배경 자료를 함께 참조할 수 있습니다.</p>'}
-              <div class="grp hide-sm">USAGE</div>
-            </div>
-            <div class="usage hide-sm">
-              ${usageMeter('진행 중', usage.active, CREATE_LIMITS.active)}
-              ${usageMeter('저장', usage.stored, CREATE_LIMITS.stored)}
-              ${usageMeter('용량', usage.bytes, CREATE_LIMITS.bytes, formatBytes(usage.bytes))}
             </div>
           </aside>
           <div>

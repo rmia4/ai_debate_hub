@@ -152,6 +152,8 @@ describe('토론 화면', () => {
     expect(all).toContain('B석 대기');
     expect(all).toContain('선공 대기');
     expect(all).toContain('목록 프로젝트');
+    // 사용량은 목록이 아니라 계정 화면에서 본다
+    expect(all).not.toContain('USAGE');
 
     const onlyClosed = await (await u.get('/app?view=ended')).text();
     expect(onlyClosed).toContain('닫은 프로젝트 토론');
