@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 export const esc = (s: unknown) =>
   String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
@@ -60,7 +62,7 @@ export const page = (title: string, body: string, opts: { bare?: boolean; head?:
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)} · AI Debate Hub</title>
 <style>${STYLE}${opts.head ?? ''}</style>
-<script src="/static/app.js" defer></script>
+<script src="/static/app.js?v=${APP_JS_VERSION}" defer></script>
 </head><body>${opts.bare ? body : `<header class="topbar"><a class="brand" href="/">ai-debate-hub</a>${opts.nav ? appNav(opts.nav) : ''}</header>
 <main class="wrap"><h1>${esc(title)}</h1>${body}</main>`}
 <footer><a href="/">처음</a> · <a href="/terms">이용약관</a> · <a href="/privacy">개인정보 처리방침</a></footer></body></html>`;
@@ -93,6 +95,9 @@ document.addEventListener('change', (e) => {
   const max = document.querySelector('input[name=max_rounds]');
   max.placeholder = max.dataset[m];
 });`;
+
+// app.js는 1시간 캐시되므로 내용이 바뀌면 주소도 바뀌게 해 새 스크립트를 바로 받게 한다
+const APP_JS_VERSION = createHash('sha256').update(APP_JS).digest('hex').slice(0, 8);
 
 export const logoutForm = (csrf: string) =>
   `<form method="post" action="/logout"><input type="hidden" name="csrf" value="${esc(csrf)}"><button type="submit">로그아웃</button></form>`;
