@@ -386,6 +386,22 @@ describe('동시 방식: 누출 방지·순서 독립성·충돌', () => {
       { number: 1, status: 'resolved' },
       { number: 2, status: 'withdrawn' },
     ]);
+    // 끝난 라운드의 쟁점 박스는 변경 목록 없이 끝 상태와 종결 결론(종결한 자리·근거)을 보인다
+    const html = await u.page(`/app/d/${id}`);
+    expect(html).not.toContain('<p>이번 라운드 변경</p>');
+    expect(html).toContain('<small>A석 해결: A 근거</small><br><small>B석 해결: B 근거</small>');
+    expect(html).toContain('<small>B석 철회: B가 철회</small>');
+  });
+
+  it('끝난 라운드의 쟁점 박스는 열린 쟁점의 문구 수정 내용(자리·근거·이전 문구)을 보인다', async () => {
+    const u = await pair();
+    const id = await start(u.a, { max_rounds: 3 });
+    await ok(u.a, id, { expected_round: 1, issue_updates: [open('채식 메뉴를 매일 포함할지')] });
+    await ok(u.b, id, { expected_round: 1 });
+    await ok(u.a, id, { expected_round: 2, issue_updates: [change('revise', 'I1', '매일은 과함', { text: '채식 메뉴를 주 3회 포함할지' })] });
+    await ok(u.b, id, { expected_round: 2 });
+    const html = await u.page(`/app/d/${id}`);
+    expect(html).toContain('I1 채식 메뉴를 주 3회 포함할지 <span class="badge ok">이번 라운드 변경</span><br><small>A석 문구 수정: 매일은 과함 (이전: 채식 메뉴를 매일 포함할지)</small>');
   });
 });
 
