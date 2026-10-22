@@ -157,6 +157,26 @@ describe('토론 화면', () => {
     expect(current(await (await u.get(`/app/d/${id}?view=toString`)).text())).toBe('c');
   });
 
+  it('순차 토론도 같은 다섯 화면 방식을 고를 수 있고, 현재 합의안과 다음 차례를 보여 준다', async () => {
+    const u = await user(true);
+    const { id } = await webCreate(u, { topic: '순차 화면 방식', mode: 'sequential' });
+    await tool(u.claude, 'submit', { discussion_id: id, expected_round: 1, content: '선공 A석 답변', proposal: '순차 첫 안' });
+
+    const current = (html: string) => /<option value="(\w)" selected>/.exec(html)?.[1];
+    expect(current(await (await u.get(`/app/d/${id}`)).text())).toBe('a');
+    for (const v of ['b', 'c', 'd', 'e', 'a']) {
+      const html = await (await u.get(`/app/d/${id}?view=${v}`)).text();
+      expect(current(html)).toBe(v);
+      expect(html).toContain('선공 A석 답변');
+      expect(html).toContain('순차 첫 안');
+      expect(html).toContain('B석 차례');
+    }
+    // 고른 방식은 동시·순차가 함께 쓴다
+    await u.get(`/app/d/${id}?view=e`);
+    const { id: parallel } = await webCreate(u);
+    expect(current(await (await u.get(`/app/d/${parallel}`)).text())).toBe('e');
+  });
+
   it('목록은 진행 중 토론의 차례를 보여 주고, 프로젝트·진행 중·종료 탭으로 거를 수 있다', async () => {
     const u = await user(true);
     const pid = /^\/app\?project=(.+)$/.exec((await u.post('/app/projects/new', { name: '목록 프로젝트' })).headers.get('location') ?? '')?.[1];
