@@ -19,11 +19,12 @@ const formatTime = (d: Date | null) =>
 
 const str = (body: Record<string, unknown>, k: string) => (typeof body[k] === 'string' ? (body[k] as string) : '');
 
-function projectForm(csrf: string, action: string, values: Record<string, unknown>, submit: string) {
+// cancel이 있으면 제출 버튼 옆에 그 주소로 돌아가는 취소 버튼을 둔다(새 프로젝트 화면)
+function projectForm(csrf: string, action: string, values: Record<string, unknown>, submit: string, cancel?: string) {
   return `<form method="post" action="${action}">${csrfField(csrf)}
       <label>이름 (${L.name}자 이내)<br><input name="name" required maxlength="${L.name}" size="60" value="${esc(str(values, 'name'))}"></label>
       <label>설명 (선택, ${L.description}자 이내)<br><textarea name="description" maxlength="${L.description}" rows="4" cols="60">${esc(str(values, 'description'))}</textarea></label>
-      <button type="submit">${submit}</button>
+      <button type="submit">${submit}</button>${cancel ? `\n      <a class="btn" href="${cancel}">취소</a>` : ''}
     </form>`;
 }
 
@@ -87,7 +88,7 @@ export function projectDetailSection(csrf: string, p: Project) {
 
 export function projectBackgroundsSection(p: Project, backgrounds: Background[]) {
   const id = esc(p.id);
-  return `<p><a class="btn" href="/app/p/${id}/backgrounds/new">배경 추가</a> <a class="btn" href="/app/new?project=${id}">이 프로젝트에서 새 토론</a></p>
+  return `<p><a class="btn" href="/app/p/${id}/backgrounds/new">배경 추가</a></p>
     <p><small>${FILE_NOTE}</small></p>
     ${backgrounds.length ? `<table><tr><th>제목</th><th>종류</th><th>요약 또는 위치</th><th>revision</th><th>최근 수정</th><th>수정한 쪽</th></tr>${backgroundRows(backgrounds)}</table>` : '<p>아직 배경 항목이 없습니다.</p>'}`;
 }
@@ -113,7 +114,7 @@ export function projectPagesRouter(config: Config, db: Db) {
 
   router.get('/app/projects/new', (_req, res) => {
     const web = res.locals.web!;
-    res.send(page('새 프로젝트', `<p>프로젝트는 사용자당 ${PROJECT_LIMITS.projects}개까지 만들 수 있습니다.</p>${projectForm(web.csrf, '/app/projects/new', {}, '프로젝트 만들기')}`, { nav: web }));
+    res.send(page('새 프로젝트', `<p>프로젝트는 사용자당 ${PROJECT_LIMITS.projects}개까지 만들 수 있습니다.</p>${projectForm(web.csrf, '/app/projects/new', {}, '프로젝트 만들기', '/app')}`, { nav: web }));
   });
 
   router.post('/app/projects/new', formBody, async (req, res, next) => {
@@ -127,7 +128,7 @@ export function projectPagesRouter(config: Config, db: Db) {
       if (!(e instanceof DiscussionError) || !['invalid_settings', 'limit_exceeded'].includes(e.code)) return handle(res, next, e);
       res
         .status(e.code === 'limit_exceeded' ? 409 : 400)
-        .send(page('새 프로젝트', `<p class="warn">${esc(e.message)}</p>${projectForm(web.csrf, '/app/projects/new', body, '프로젝트 만들기')}`, { nav: web }));
+        .send(page('새 프로젝트', `<p class="warn">${esc(e.message)}</p>${projectForm(web.csrf, '/app/projects/new', body, '프로젝트 만들기', '/app')}`, { nav: web }));
     }
   });
 

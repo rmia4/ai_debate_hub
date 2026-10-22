@@ -59,8 +59,9 @@ const deleteGuide = `<p class="warn">보관 한도(${CREATE_LIMITS.stored}개·$
 const roundsLabel = (d: Discussion) =>
   d.mode === 'parallel' ? `라운드 ${d.current_round}/${d.max_rounds}` : `턴 ${d.current_round}/${d.max_rounds}`;
 
-// 목록 화면: 왼쪽에 새 토론·상태·프로젝트 필터, 오른쪽에 토론 표
-const LIST_STYLE = `.split{display:grid;grid-template-columns:14rem 1fr;gap:2rem;align-items:start}.list-scope{margin-top:0}
+// 목록 화면: 왼쪽에 새 토론·상태·프로젝트 필터, 오른쪽에 토론 표. 프로젝트 탭이면 범위 줄 오른쪽에 새 토론 버튼
+const LIST_STYLE = `.split{display:grid;grid-template-columns:14rem 1fr;gap:2rem;align-items:start}
+.list-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.5rem 1rem;margin-bottom:1rem}.list-scope{margin:0}
 .side .btn{display:block;text-align:center}
 .side-nav{font-size:.88rem}
 .side-nav a{display:flex;align-items:center;justify-content:space-between;gap:.5rem;min-height:44px;padding:0 .6rem;color:var(--fg);text-decoration:none;border-left:2px solid transparent}
@@ -232,6 +233,9 @@ function backgroundChoices({ project, backgrounds, checked }: ProjectChoice) {
 function newForm(csrf: string, values: Record<string, unknown> = {}, error = '', choice: ProjectChoice | null = null) {
   const v = (k: string) => esc(typeof values[k] === 'string' ? values[k] : '');
   const mode = values.mode === 'sequential' ? 'sequential' : 'parallel';
+  // 고른 방식의 설명만 보인다. 라디오를 바꾸면 app.js가 hidden과 placeholder를 바꾼다.
+  const only = (m: typeof mode) => `data-mode="${m}"${m === mode ? '' : ' hidden'}`;
+  const maxPlaceholder = { parallel: '기본 5', sequential: '기본 10' };
   return `${error ? `<p class="warn">${esc(error)}</p>` : ''}
     <p class="warn"><b>기밀이나 개인정보를 넣지 마세요.</b> 주제·배경과 AI 답변은 서버에 저장되며, 참여하는 AI 서비스에도 전달됩니다.</p>
     <form method="post" action="/app/new">${csrfField(csrf)}
@@ -239,12 +243,20 @@ function newForm(csrf: string, values: Record<string, unknown> = {}, error = '',
       <label>주제 (${INPUT_LIMITS.topic}자 이내)<br><input name="topic" required maxlength="${INPUT_LIMITS.topic}" size="60" value="${v('topic')}"></label>
       <label>배경 설명·제약 조건 (선택, ${INPUT_LIMITS.context}자 이내)<br><textarea name="context" maxlength="${INPUT_LIMITS.context}" rows="6" cols="60">${v('context')}</textarea></label>
       <fieldset><legend>진행 방식</legend>
-        <label><input type="radio" name="mode" value="parallel"${mode === 'parallel' ? ' checked' : ''}> 동시: 매 라운드 양쪽이 한 번씩 독립적으로 답변</label>
-        <label><input type="radio" name="mode" value="sequential"${mode === 'sequential' ? ' checked' : ''}> 순차: 한 턴씩 번갈아 답변, 사인 두 번으로 합의</label>
+        <label class="inline"><input type="radio" name="mode" value="parallel"${mode === 'parallel' ? ' checked' : ''}> 동시 (기본)</label>
+        <label class="inline"><input type="radio" name="mode" value="sequential"${mode === 'sequential' ? ' checked' : ''}> 순차</label>
+        <div ${only('parallel')}><b>매 라운드 A석·B석이 상대의 이번 답변을 보지 않고 각자 한 번씩 답변합니다.</b><br>
+          <small>다음 라운드에서 직전 라운드의 양쪽 답변을 읽고 반박·수정안·동의를 냅니다. 같은 라운드에 양쪽이 같은 합의안에 동의하면 합의입니다. 서로의 첫 의견에 끌려가지 않는 독립 검토에 맞습니다.</small></div>
+        <div ${only('sequential')}><b>한 번에 한 쪽만 답변하며 번갈아 진행합니다.</b><br>
+          <small>먼저 제출한 쪽이 선공이 되어 의견과 합의안을 냅니다. 상대는 이의나 수정안을 내거나, 현재 합의안을 수정 없이 받아들이면 사인합니다. 두 턴 연속으로 사인하면 합의입니다. 하나의 안을 주고받으며 다듬는 데 맞습니다.</small></div>
       </fieldset>
-      <label>최대 라운드(동시 2~10, 기본 5) 또는 최대 턴(순차 4~20, 기본 10)<br><input name="max_rounds" type="number" min="2" max="20" value="${v('max_rounds')}"></label>
-      <label>최소 라운드 (동시 방식만, 기본 2)<br><input name="min_rounds" type="number" min="2" max="10" value="${v('min_rounds')}"></label>
+      <label><span ${only('parallel')}>최대 라운드 (2~10)</span><span ${only('sequential')}>최대 턴 (4~20, 한쪽의 답변 하나가 한 턴)</span><br>
+        <input name="max_rounds" type="number" min="2" max="20" value="${v('max_rounds')}" placeholder="${maxPlaceholder[mode]}" data-parallel="${maxPlaceholder.parallel}" data-sequential="${maxPlaceholder.sequential}"><br>
+        <small>여기까지 합의가 안 되면 '최대 도달·합의 미확정'으로 끝납니다.</small></label>
+      <div ${only('parallel')}><label>최소 라운드 (2~10)<br><input name="min_rounds" type="number" min="2" max="10" value="${v('min_rounds')}" placeholder="기본 2"><br>
+        <small>이 라운드 전에는 양쪽이 동의해도 확정하지 않고 계속합니다.</small></label></div>
       <button type="submit">토론방 만들기</button>
+      <a class="btn" href="${esc(choice ? projectHome(choice.project.id) : '/app')}">취소</a>
     </form>`;
 }
 
@@ -348,7 +360,8 @@ export function discussionPagesRouter(config: Config, db: Db) {
             </div>
           </aside>
           <div>
-            <p class="note list-scope">${scope ? `${esc(scope)} · ` : ''}${shown.length}개 · 최근 수정 순</p>
+            <div class="list-head"><p class="note list-scope">${scope ? `${esc(scope)} · ` : ''}${shown.length}개 · 최근 수정 순</p>
+              ${project ? `<a class="btn" href="/app/new?project=${esc(project)}">이 프로젝트에서 새 토론</a>` : ''}</div>
             ${full ? deleteGuide : ''}
             ${body}
           </div>

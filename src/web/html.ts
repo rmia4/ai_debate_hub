@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 export const esc = (s: unknown) =>
   String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
@@ -20,6 +22,7 @@ nav a{color:var(--mute);text-decoration:none}nav a::before{content:"[";color:var
 label{display:block;margin:.75rem 0}
 input,textarea,select{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:2px;padding:.4rem .6rem;max-width:100%}
 input[type=checkbox],input[type=radio]{accent-color:var(--acc)}
+input[type=number]{width:8rem}
 table{border-collapse:collapse;width:100%;background:var(--panel);border:1px solid var(--line)}
 td,th{border-bottom:1px dashed var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}th{font-family:var(--mono);color:var(--mute);font-weight:500;font-size:.8rem}
 button,.btn{display:inline-block;font-family:var(--mono);font-size:.88rem;font-weight:600;padding:.55rem 1rem;min-height:44px;color:var(--acc);border:1px solid var(--acc);border-radius:2px;background:transparent;text-decoration:none;cursor:pointer;transition:background .15s,color .15s}
@@ -59,7 +62,7 @@ export const page = (title: string, body: string, opts: { bare?: boolean; head?:
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)} · AI Debate Hub</title>
 <style>${STYLE}${opts.head ?? ''}</style>
-<script src="/static/app.js" defer></script>
+<script src="/static/app.js?v=${APP_JS_VERSION}" defer></script>
 </head><body>${opts.bare ? body : `<header class="topbar"><a class="brand" href="/">ai-debate-hub</a>${opts.nav ? appNav(opts.nav) : ''}</header>
 <main class="wrap"><h1>${esc(title)}</h1>${body}</main>`}
 <footer><a href="/">처음</a> · <a href="/terms">이용약관</a> · <a href="/privacy">개인정보 처리방침</a></footer></body></html>`;
@@ -83,7 +86,18 @@ export const APP_JS = `document.addEventListener('click', (e) => {
     () => { b.textContent = '복사했습니다'; setTimeout(() => { b.textContent = label; }, 2000); },
     () => { const err = document.getElementById('copy-error'); if (err) err.hidden = false; },
   );
+});
+// 새 토론방: 고른 진행 방식의 설명과 기본값만 보인다
+document.addEventListener('change', (e) => {
+  if (e.target.name !== 'mode') return;
+  const m = e.target.value;
+  for (const el of document.querySelectorAll('[data-mode]')) el.hidden = el.dataset.mode !== m;
+  const max = document.querySelector('input[name=max_rounds]');
+  max.placeholder = max.dataset[m];
 });`;
+
+// app.js는 1시간 캐시되므로 내용이 바뀌면 주소도 바뀌게 해 새 스크립트를 바로 받게 한다
+const APP_JS_VERSION = createHash('sha256').update(APP_JS).digest('hex').slice(0, 8);
 
 export const logoutForm = (csrf: string) =>
   `<form method="post" action="/logout"><input type="hidden" name="csrf" value="${esc(csrf)}"><button type="submit">로그아웃</button></form>`;
