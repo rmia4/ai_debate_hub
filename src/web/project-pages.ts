@@ -88,7 +88,7 @@ export function projectDetailSection(csrf: string, p: Project) {
 
 export function projectBackgroundsSection(p: Project, backgrounds: Background[]) {
   const id = esc(p.id);
-  return `<p><a class="btn" href="/app/p/${id}/backgrounds/new">배경 추가</a> <a class="btn" href="/app/new?project=${id}">이 프로젝트에서 새 토론</a></p>
+  return `<p><a class="btn" href="/app/p/${id}/backgrounds/new">배경 추가</a></p>
     <p><small>${FILE_NOTE}</small></p>
     ${backgrounds.length ? `<table><tr><th>제목</th><th>종류</th><th>요약 또는 위치</th><th>revision</th><th>최근 수정</th><th>수정한 쪽</th></tr>${backgroundRows(backgrounds)}</table>` : '<p>아직 배경 항목이 없습니다.</p>'}`;
 }

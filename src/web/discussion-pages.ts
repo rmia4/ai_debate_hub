@@ -59,8 +59,9 @@ const deleteGuide = `<p class="warn">보관 한도(${CREATE_LIMITS.stored}개·$
 const roundsLabel = (d: Discussion) =>
   d.mode === 'parallel' ? `라운드 ${d.current_round}/${d.max_rounds}` : `턴 ${d.current_round}/${d.max_rounds}`;
 
-// 목록 화면: 왼쪽에 새 토론·상태·프로젝트 필터, 오른쪽에 토론 표
-const LIST_STYLE = `.split{display:grid;grid-template-columns:14rem 1fr;gap:2rem;align-items:start}.list-scope{margin-top:0}
+// 목록 화면: 왼쪽에 새 토론·상태·프로젝트 필터, 오른쪽에 토론 표. 프로젝트 탭이면 범위 줄 오른쪽에 새 토론 버튼
+const LIST_STYLE = `.split{display:grid;grid-template-columns:14rem 1fr;gap:2rem;align-items:start}
+.list-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.5rem 1rem;margin-bottom:1rem}.list-scope{margin:0}
 .side .btn{display:block;text-align:center}
 .side-nav{font-size:.88rem}
 .side-nav a{display:flex;align-items:center;justify-content:space-between;gap:.5rem;min-height:44px;padding:0 .6rem;color:var(--fg);text-decoration:none;border-left:2px solid transparent}
@@ -359,7 +360,8 @@ export function discussionPagesRouter(config: Config, db: Db) {
             </div>
           </aside>
           <div>
-            <p class="note list-scope">${scope ? `${esc(scope)} · ` : ''}${shown.length}개 · 최근 수정 순</p>
+            <div class="list-head"><p class="note list-scope">${scope ? `${esc(scope)} · ` : ''}${shown.length}개 · 최근 수정 순</p>
+              ${project ? `<a class="btn" href="/app/new?project=${esc(project)}">이 프로젝트에서 새 토론</a>` : ''}</div>
             ${full ? deleteGuide : ''}
             ${body}
           </div>
