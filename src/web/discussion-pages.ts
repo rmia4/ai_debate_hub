@@ -19,10 +19,11 @@ import {
   type Turn,
 } from '../db/discussions.js';
 import { getIssueLedger, type IssueChange, type IssueLedger } from '../db/issues.js';
-import { projectsFor, type Background } from '../db/projects.js';
+import { PROJECT_LIMITS, projectsFor, type Background } from '../db/projects.js';
 import { deleteUser } from '../db/users.js';
 import { crossingText, instructionFor, joinMessage, PARTICIPANT_NAME } from '../instructions.js';
 import { csrfField, esc, page } from './html.js';
+import { projectBackgroundsSection, projectDetailSection, projectHome } from './project-pages.js';
 import {
   discussionMarkdown,
   issueChangeFlags,
@@ -58,11 +59,10 @@ const deleteGuide = `<p class="warn">보관 한도(${CREATE_LIMITS.stored}개·$
 const roundsLabel = (d: Discussion) =>
   d.mode === 'parallel' ? `라운드 ${d.current_round}/${d.max_rounds}` : `턴 ${d.current_round}/${d.max_rounds}`;
 
-// 목록 화면: 왼쪽에 새 토론·상태·프로젝트 필터·사용량, 오른쪽에 토론 표
+// 목록 화면: 왼쪽에 새 토론·상태·프로젝트 필터, 오른쪽에 토론 표
 const LIST_STYLE = `.split{display:grid;grid-template-columns:14rem 1fr;gap:2rem;align-items:start}.list-scope{margin-top:0}
 .side .btn{display:block;text-align:center}
 .side-nav{font-size:.88rem}
-.side-nav .grp{font-family:var(--mono);color:var(--mute);font-size:.75rem;margin:1.2rem 0 .3rem;letter-spacing:.04em}
 .side-nav a{display:flex;align-items:center;justify-content:space-between;gap:.5rem;min-height:44px;padding:0 .6rem;color:var(--fg);text-decoration:none;border-left:2px solid transparent}
 .side-nav a span{font-family:var(--mono);font-size:.8rem;color:var(--mute)}.side-nav a:hover{color:var(--acc)}
 .side-nav a.on{border-left-color:var(--acc);background:var(--hl);color:var(--acc)}
@@ -70,24 +70,20 @@ const LIST_STYLE = `.split{display:grid;grid-template-columns:14rem 1fr;gap:2rem
 .side-nav summary::-webkit-details-marker{display:none}
 .side-nav summary::before{content:"▸";font-family:var(--mono);color:var(--mute);width:1.1rem;flex:none}
 .side-nav details[open]>summary::before{content:"▾"}
-.side-nav .sub a{padding-left:1.7rem}
+.side-nav .sub a{margin-left:1.1rem;padding-left:.6rem}
 .side-nav .note{margin:.3rem .6rem}
-.usage{display:grid;gap:.25rem;font-family:var(--mono);font-size:.78rem;color:var(--mute)}
-.usage div{display:flex;justify-content:space-between;align-items:center;gap:.5rem}
-.meter{width:5rem;height:.4rem;border:1px solid var(--line);position:relative;flex:none}
-.meter i{position:absolute;inset:0 auto 0 0;background:var(--acc)}.meter.hi i{background:var(--b)}
+.side-nav summary,.side-nav a{border-bottom:1px solid var(--line)}
 .split td:first-child{width:50%}.split .badge{white-space:nowrap}
 .badge.b,.turn-chip{color:var(--b)}.turn-chip{font-family:var(--mono);font-size:.78rem;white-space:nowrap}
 .when{font-family:var(--mono);font-size:.8rem;color:var(--mute);white-space:nowrap}
 @media (max-width:760px){.split{grid-template-columns:1fr;gap:1rem}
-.side-nav{display:flex;flex-wrap:wrap;gap:.3rem}.side-nav .grp{width:100%;margin:.4rem 0 0}.side-nav a{border:1px solid var(--line)}
-.hide-sm{display:none}}`;
-
-// 사용량 한 줄과 막대. 80% 이상이면 B색으로 표시한다
-function usageMeter(label: string, used: number, limit: number, text = `${used}/${limit}`) {
-  const pct = Math.min(100, Math.round((used / limit) * 100));
-  return `<div>${label} ${text}<span class="meter${pct >= 80 ? ' hi' : ''}"><i style="width:${pct}%"></i></span></div>`;
-}
+.side-nav{display:flex;flex-wrap:wrap;gap:.3rem}.side-nav a{border:1px solid var(--line)}
+.hide-sm{display:none}}
+details.pj{border-top:1px solid var(--line);padding:.2rem 0 .6rem}
+details.pj>summary{cursor:pointer;font-weight:600;min-height:44px;display:flex;align-items:center;gap:.4rem;list-style:none}
+details.pj>summary::-webkit-details-marker{display:none}
+details.pj>summary::after{content:"▸";font-family:var(--mono);font-size:1.3em;line-height:1;color:var(--mute)}
+details.pj[open]>summary::after{content:"▾"}`;
 
 // 진행 중 토론의 차례. 동시는 현재 라운드에 아직 안 낸 자리, 순차는 마지막 제출의 반대쪽
 function turnChip(d: Discussion, state?: { submitted: Participant[]; last: Participant | null }) {
@@ -228,7 +224,7 @@ function backgroundChoices({ project, backgrounds, checked }: ProjectChoice) {
       ${esc(b.title)} <small>${KIND_LABEL[b.kind]}${b.location ? ` · ${esc(b.location)}` : ''}</small></label>`,
   );
   return `<input type="hidden" name="project_id" value="${esc(project.id)}">
-    <fieldset><legend>참조할 배경 항목 — 이 토론에 필요한 것만 고르세요 (프로젝트 <a href="/app/p/${esc(project.id)}">${esc(project.name)}</a>)</legend>
+    <fieldset><legend>참조할 배경 항목 — 이 토론에 필요한 것만 고르세요 (프로젝트 <a href="${esc(projectHome(project.id))}">${esc(project.name)}</a>)</legend>
       ${boxes.length ? boxes.join('') : '<p>아직 배경 항목이 없습니다.</p>'}
     </fieldset>`;
 }
@@ -317,17 +313,24 @@ export function discussionPagesRouter(config: Config, db: Db) {
       const rows = shown
         .map(
           (d) => `<tr><td><a href="/app/d/${esc(d.id)}">${esc(d.topic)}</a><br><small>${
-            d.project_id ? `<a href="/app/p/${esc(d.project_id)}">${esc(projectName.get(d.project_id) ?? '')}</a> · ` : ''
+            d.project_id ? `<a href="${esc(projectHome(d.project_id))}">${esc(projectName.get(d.project_id) ?? '')}</a> · ` : ''
           }${MODE_LABEL[d.mode]}</small></td>
             <td><span class="${STATUS_BADGE[d.status]}">${STATUS_LABEL[d.status]}</span>${turnChip(d, turns.get(d.id))}</td>
             <td class="when hide-sm">${roundsLabel(d)}</td><td class="hide-sm"><small>${formatTime(d.updated_at)}</small></td></tr>`,
         )
         .join('');
       const scope = project ? projectName.get(project)! : view === 'active' ? '진행 중' : view === 'ended' ? '종료' : '';
-      const projectLine =
-        project
-          ? `<p><a href="/app/p/${esc(project)}">프로젝트 열기 →</a> · <a href="/app/new?project=${esc(project)}">이 프로젝트에서 새 토론 →</a></p>`
-          : '';
+      const table = shown.length
+        ? `<table><tr><th>주제</th><th>상태</th><th class="hide-sm">진행</th><th class="hide-sm">최근 수정</th></tr>${rows}</table>`
+        : `<p>${list.length ? '조건에 맞는 토론이 없습니다.' : '아직 토론이 없습니다.'}</p>`;
+      // 프로젝트 탭은 정보·설정, 배경 항목, 토론 표를 접이식 구역으로 보여 준다
+      let body = table;
+      if (project) {
+        const { project: p, backgrounds } = await projectsFor(db, web.user.id).get(project);
+        body = `<details class="pj"><summary>프로젝트 정보·설정</summary>${projectDetailSection(web.csrf, p)}</details>
+            <details class="pj" open><summary>배경 항목 (${backgrounds.length}/${PROJECT_LIMITS.backgrounds})</summary>${projectBackgroundsSection(p, backgrounds)}</details>
+            <details class="pj" open><summary>토론 (${shown.length})</summary>${shown.length ? table : '<p>아직 이 프로젝트의 토론이 없습니다.</p>'}</details>`;
+      }
 
       res.send(
         page(
@@ -342,23 +345,12 @@ export function discussionPagesRouter(config: Config, db: Db) {
               ${link('진행 중', active.length, '/app?view=active', view === 'active')}
               ${link('종료', ended.length, '/app?view=ended', view === 'ended')}
               ${projects.length ? '' : '<p class="note">프로젝트를 만들면 여러 토론이 긴 배경 자료를 함께 참조할 수 있습니다.</p>'}
-              <div class="grp hide-sm">USAGE</div>
-            </div>
-            <div class="usage hide-sm">
-              ${usageMeter('진행 중', usage.active, CREATE_LIMITS.active)}
-              ${usageMeter('저장', usage.stored, CREATE_LIMITS.stored)}
-              ${usageMeter('용량', usage.bytes, CREATE_LIMITS.bytes, formatBytes(usage.bytes))}
             </div>
           </aside>
           <div>
             <p class="note list-scope">${scope ? `${esc(scope)} · ` : ''}${shown.length}개 · 최근 수정 순</p>
-            ${projectLine}
             ${full ? deleteGuide : ''}
-            ${
-              shown.length
-                ? `<table><tr><th>주제</th><th>상태</th><th class="hide-sm">진행</th><th class="hide-sm">최근 수정</th></tr>${rows}</table>`
-                : `<p>${list.length ? '조건에 맞는 토론이 없습니다.' : '아직 토론이 없습니다.'}</p>`
-            }
+            ${body}
           </div>
           </div>`,
           { nav: web, head: LIST_STYLE },
@@ -443,7 +435,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
           <p>토론 ID <code>${esc(d.id)}</code> · ${MODE_LABEL[d.mode]} 방식 · <span class="badge">${STATUS_LABEL[d.status]}</span> · ${roundsLabel(d)}${
             d.mode === 'parallel' ? ` (최소 ${d.min_rounds})` : ''
           }${d.starter ? ` · 선공 ${PARTICIPANT_NAME[d.starter]}` : ''}${
-            project ? ` · 프로젝트 <a href="/app/p/${esc(project.id)}">${esc(project.name)}</a>` : ''
+            project ? ` · 프로젝트 <a href="${esc(projectHome(project.id))}">${esc(project.name)}</a>` : ''
           }</p>
           ${d.context ? `<h2>배경</h2>${renderMarkdown(d.context)}` : ''}
           ${referencesSection(refs)}
