@@ -22,7 +22,7 @@ import { getIssueLedger, type IssueLedger } from '../db/issues.js';
 import { PROJECT_LIMITS, projectsFor, type Background } from '../db/projects.js';
 import { deleteUser } from '../db/users.js';
 import { crossingText, instructionFor, joinMessage, PARTICIPANT_NAME } from '../instructions.js';
-import { formatTime, PARALLEL_STYLE, parallelPage, pickView, turnBox } from './discussion-views.js';
+import { formatTime, parallelPage, pickView, sequentialPage, VIEW_STYLE } from './discussion-views.js';
 import { csrfField, esc, page, settingsPage } from './html.js';
 import { projectBackgroundsSection, projectDetailSection, projectHome } from './project-pages.js';
 import {
@@ -98,15 +98,6 @@ function turnChip(d: Discussion, state?: { submitted: Participant[]; last: Parti
 }
 
 const STATUS_BADGE: Record<Status, string> = { active: 'badge ok', agreed: 'badge', max_reached: 'badge b', closed: 'badge' };
-
-// 순차: 대화형 타임라인과 다음 차례
-function sequentialRecord(d: Discussion, turns: Turn[], ledger: IssueLedger) {
-  const timeline = turns.map((t) => `<h3>턴 ${t.round}</h3>${turnBox(t, d, ledger.changesByTurn[t.id])}`).join('');
-  if (d.status !== 'active') return timeline;
-  const last = turns.at(-1);
-  const next = last ? PARTICIPANT_NAME[last.participant === 'A' ? 'B' : 'A'] : '먼저 제출하는 쪽(선공)';
-  return `${timeline}<p><span class="badge">다음 차례</span> 턴 ${d.current_round}: ${next}</p>`;
-}
 
 // 쟁점 요약: 열린 쟁점과 종결된 쟁점(종결 턴·근거). 종료된 토론에서 열린 채 남은 쟁점은 미종결로 표시한다.
 // 쟁점 ID가 없는 구 형식 이견(open_issues)은 자리별 마지막 제출의 것만 따로 보여 준다.
@@ -410,27 +401,21 @@ export function discussionPagesRouter(config: Config, db: Db) {
       const manage = `<p><a href="/app/d/${esc(d.id)}.md">마크다운 내보내기</a></p>
           ${actions}
           ${ended ? '' : instructionsSection(d, project, refs)}`;
-      // 동시 토론은 사용자가 고른 화면 방식으로 보인다. 순차 토론은 기존 구성 그대로
-      const body =
-        d.mode === 'parallel'
-          ? parallelPage(pickView(req, res), {
-              d,
-              turns,
-              ledger,
-              notices,
-              meta,
-              issues: issuesOf(d, turns, ledger),
-              conclusion: conclusionOf(d, turns),
-              extras: `${background}${manage}`,
-              extrasOpen: created,
-            })
-          : `${notices}${meta}${background}
-          <h2>결론</h2>${conclusionOf(d, turns)}
-          <h2>쟁점</h2>${issuesOf(d, turns, ledger)}
-          <h2>기록</h2>${sequentialRecord(d, turns, ledger)}
-          ${turns.length || ended ? '' : '<p>아직 제출이 없습니다.</p>'}
-          ${manage}`;
-      res.send(page(d.topic, body, { nav: web, head: d.mode === 'parallel' ? PARALLEL_STYLE : undefined }));
+      // 동시·순차 모두 사용자가 고른 화면 방식으로 보인다
+      const input = {
+        d,
+        turns,
+        ledger,
+        notices,
+        meta,
+        issues: issuesOf(d, turns, ledger),
+        conclusion: conclusionOf(d, turns),
+        extras: `${background}${manage}`,
+        extrasOpen: created,
+      };
+      const view = pickView(req, res);
+      const body = d.mode === 'parallel' ? parallelPage(view, input) : sequentialPage(view, input);
+      res.send(page(d.topic, body, { nav: web, head: VIEW_STYLE }));
     } catch (e) {
       handle(res, next, e);
     }
