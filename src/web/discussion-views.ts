@@ -321,9 +321,9 @@ const RENDER: Record<View, (p: ParallelPage) => string> = { a: viewA, b: viewB, 
 
 // 요약 줄 오른쪽에 화면 보기 설정 드롭다운. 고르면 app.js가 폼을 보내 ?view=로 다시 연다
 export function parallelPage(view: View, { notices, meta, ...p }: ParallelInput) {
-  const picker = `<form method="get" class="pv-view"><label>화면 보기 설정 <select name="view" data-autosubmit>${Object.entries(VIEWS)
-    .map(([k, label]) => `<option value="${k}"${k === view ? ' selected' : ''}>${k.toUpperCase()} ${label}</option>`)
-    .join('')}</select></label></form>`;
+  const picker = `<form method="get" class="pv-view"><label for="pv-view">화면</label><span class="pv-select"><select id="pv-view" name="view" data-autosubmit>${Object.entries(VIEWS)
+    .map(([k, label]) => `<option value="${k}"${k === view ? ' selected' : ''}>${label}</option>`)
+    .join('')}</select></span></form>`;
   return RENDER[view]({ ...p, head: `${notices}<div class="pv-meta">${meta}${picker}</div>` });
 }
 
@@ -336,7 +336,10 @@ export const PARALLEL_STYLE = `.box{position:relative;background:var(--panel);bo
 .seat-A{color:var(--acc)}.seat-B{color:var(--b)}.turn.seat-A,.turn.seat-B{color:inherit}
 .badge.b{color:var(--b)}
 .pv-meta{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.4rem 1rem}.pv-meta>p{margin:0}
-.pv-view label{margin:0;display:flex;align-items:center;gap:.5rem;font-family:var(--mono);font-size:.82rem;color:var(--mute)}.pv-view select{min-height:44px;font-family:var(--mono);font-size:.85rem}
+.pv-view{display:flex;align-items:center;gap:.45rem;font-size:.82rem}.pv-view label{margin:0;color:var(--mute)}
+.pv-select{position:relative;display:inline-flex}.pv-select::after{content:"▾";position:absolute;right:.5rem;top:50%;transform:translateY(-50%);font-family:var(--mono);font-size:.75rem;color:var(--mute);pointer-events:none}
+.pv-select select{appearance:none;height:2rem;padding:0 1.6rem 0 .6rem;font-size:.82rem;line-height:1;border-radius:2px;cursor:pointer;transition:border-color .15s}
+.pv-select select:hover{border-color:var(--acc)}.pv-select:hover::after{color:var(--acc)}
 .meter{display:flex;gap:3px;margin-top:.3rem}.meter i{flex:1;height:6px;background:var(--line)}.meter i.done{background:var(--acc)}.meter i.now{background:var(--b)}
 .k{display:block;font-family:var(--mono);font-size:.75rem;color:var(--mute)}
 details.extras>summary{color:var(--fg);font-weight:700;min-height:44px;display:flex;align-items:center;gap:.4rem;list-style:none}
