@@ -299,6 +299,15 @@ describe('동시 방식', () => {
     const late = await u.claude('submit', { discussion_id: id, expected_round: 3, content: '늦은 답변' });
     expect(late).toMatchObject({ isError: true, data: { error: 'ended' } });
   });
+
+  it('마지막 라운드에만 guide가 마지막 라운드임을 알린다', async () => {
+    const u = await pair();
+    const id = await start(u.claude, { max_rounds: 3 });
+    await Promise.all([ok(u.claude, id, { expected_round: 1 }), ok(u.codex, id, { expected_round: 1 })]);
+    expect((await u.claude('get_state', { discussion_id: id })).data.guide).not.toContain('마지막 라운드');
+    await Promise.all([ok(u.claude, id, { expected_round: 2 }), ok(u.codex, id, { expected_round: 2 })]);
+    expect((await u.claude('get_state', { discussion_id: id })).data.guide).toContain('마지막 라운드입니다');
+  });
 });
 
 describe('동시 방식: 동의 대상이 엇갈렸을 때', () => {
@@ -448,6 +457,16 @@ describe('순차 방식', () => {
       expect(state.starter).toBe(accepted[0].data.submission.participant);
       expect(await turnCount(id)).toBe(1);
     }
+  });
+
+  it('마지막 턴에만 guide가 마지막 턴임을 알린다', async () => {
+    const u = await pair();
+    const id = await start(u.claude, { mode: 'sequential', max_rounds: 4 });
+    await ok(u.claude, id, { expected_round: 1 });
+    await ok(u.codex, id, { expected_round: 2 });
+    expect((await u.claude('get_state', { discussion_id: id })).data.guide).not.toContain('마지막 턴');
+    await ok(u.claude, id, { expected_round: 3 });
+    expect((await u.codex('get_state', { discussion_id: id })).data.guide).toContain('마지막 턴입니다');
   });
 
   it('차례가 아닌 쪽의 제출은 "상대 차례"로 거부된다', async () => {
