@@ -22,12 +22,11 @@ import { getIssueLedger, type IssueLedger } from '../db/issues.js';
 import { PROJECT_LIMITS, projectsFor, type Background } from '../db/projects.js';
 import { deleteUser } from '../db/users.js';
 import { crossingText, instructionFor, joinMessage, PARTICIPANT_NAME } from '../instructions.js';
-import { formatTime, parallelPage, pickView, sequentialPage, VIEW_STYLE } from './discussion-views.js';
+import { formatTime, issueItem, parallelPage, pickView, sequentialPage, VIEW_STYLE } from './discussion-views.js';
 import { csrfField, esc, page, settingsPage } from './html.js';
 import { projectBackgroundsSection, projectDetailSection, projectHome } from './project-pages.js';
 import {
   discussionMarkdown,
-  issueLineText,
   KIND_LABEL,
   MODE_LABEL,
   projectMarkdown,
@@ -99,11 +98,11 @@ function turnChip(d: Discussion, state?: { submitted: Participant[]; last: Parti
 
 const STATUS_BADGE: Record<Status, string> = { active: 'badge ok', agreed: 'badge', max_reached: 'badge b', closed: 'badge' };
 
-// 쟁점 요약: 열린 쟁점과 종결된 쟁점(종결 턴·근거). 종료된 토론에서 열린 채 남은 쟁점은 미종결로 표시한다.
+// 쟁점 요약: 열린 쟁점을 먼저, 종결된 쟁점(종결 턴·처리한 자리별 근거·변경 이력)은 따로. 종료된 토론에서 열린 채 남은 쟁점은 미종결로 표시한다.
 // 쟁점 ID가 없는 구 형식 이견(open_issues)은 자리별 마지막 제출의 것만 따로 보여 준다.
 function issuesOf(d: Discussion, turns: Turn[], ledger: IssueLedger) {
   const list = (title: string, items: IssueLedger['issues']) =>
-    items.length ? `<h3>${title}</h3><ul>${items.map((i) => `<li>${esc(issueLineText(d, i))}</li>`).join('')}</ul>` : '';
+    items.length ? `<h3>${title}</h3><ul>${items.map((i) => issueItem(d, i)).join('')}</ul>` : '';
   const legacy = PARTICIPANTS.map((p) => {
     const last = turns.findLast((t) => t.participant === p);
     return last?.open_issues.length

@@ -182,8 +182,11 @@ describe('순차 방식: 이력과 이월', () => {
     // 웹: 개설·문구 전후·해결 근거·반영 제안 링크
     const html = await u.page(`/app/d/${id}`);
     expect(html).toContain('I1 개설: 비용');
-    expect(html).toContain('I1 문구 수정: 비용 → 초기 비용 (근거: 범위를 좁힘)');
-    expect(html).toContain(`I1 해결 (근거: 안 3이 비용을 다룸) · 반영 제안 <a href="#t${p3}">#${p3}</a>`);
+    expect(html).toContain('I1 문구 수정: 비용 → 초기 비용 · 근거: 범위를 좁힘');
+    expect(html).toContain(`I1 해결 처리 · 근거: 안 3이 비용을 다룸 · 반영 제안 <a href="#t${p3}">#${p3}</a>`);
+    // 전체 쟁점: 종결 턴과 처리한 자리의 근거
+    expect(html).toContain('<span class="badge">해결 · 턴 4</span>');
+    expect(html).toContain(`<b class="seat-B">B석</b> 해결 처리 · 근거: 안 3이 비용을 다룸 · 반영 제안 <a href="#t${p3}">#${p3}</a>`);
     expect(html).toContain(`id="t${p3}"`);
     expect(html).toContain('열린 쟁점');
     expect(html).toContain('종결된 쟁점');
@@ -261,7 +264,7 @@ describe('합의 절차와 sign/agree 결합', () => {
       ['I1', 'resolved', false],
       ['I2', 'open', true],
     ]);
-    expect(await u.page(`/app/d/${id}`)).toContain('I2 일정 [열림·합의 시 미종결]');
+    expect(await u.page(`/app/d/${id}`)).toContain('<b>I2</b> 일정 <span class="badge">열림 · 합의 시 미종결</span>');
     expect(await u.page(`/app/d/${id}.md`)).toContain('I2 일정 [열림·합의 시 미종결]');
   });
 
@@ -361,7 +364,11 @@ describe('동시 방식: 누출 방지·순서 독립성·충돌', () => {
       [id],
     );
     expect(rows.map((r) => r.conflict)).toEqual([false, true, true]);
-    expect(await u.page(`/app/d/${id}`)).toContain('<span class="badge">충돌·미반영</span>');
+    // 끝난 라운드 쟁점 박스는 충돌한 양쪽 요청과 근거를 그대로 보인다
+    const after = await u.page(`/app/d/${id}`);
+    expect(after).toContain('<br><small>이번 라운드: 두 자리의 요청이 달라 반영하지 않음</small>');
+    expect(after).toContain('<b class="seat-A">A석</b> 해결 처리 · 근거: A가 해결 <span class="badge">충돌·미반영</span>');
+    expect(after).toContain('<b class="seat-B">B석</b> 문구 수정: A 쟁점 → A 쟁점 수정안 · 근거: B의 수정 <span class="badge">충돌·미반영</span>');
   });
 
   it('합의로 끝나는 라운드의 대기 변경은 종료 트랜잭션에서 확정되고, 같은 해결은 합쳐진다', async () => {
@@ -386,22 +393,33 @@ describe('동시 방식: 누출 방지·순서 독립성·충돌', () => {
       { number: 1, status: 'resolved' },
       { number: 2, status: 'withdrawn' },
     ]);
-    // 끝난 라운드의 쟁점 박스는 변경 목록 없이 끝 상태와 종결 결론(종결한 자리·근거)을 보인다
+    // 끝난 라운드의 쟁점 박스는 바뀐 쟁점마다 상태 변화와 처리한 자리별 근거를 보인다
     const html = await u.page(`/app/d/${id}`);
-    expect(html).not.toContain('<p>이번 라운드 변경</p>');
-    expect(html).toContain('<small>A석 해결: A 근거</small><br><small>B석 해결: B 근거</small>');
-    expect(html).toContain('<small>B석 철회: B가 철회</small>');
+    expect(html).toContain('<p>이번 라운드 변경 2건 · 종료 시 열림 0건</p>');
+    expect(html).toContain(
+      '<b>I1</b> 비용 <span class="badge">해결</span><br><small>이번 라운드: 열림 → 해결</small><ul><li><b class="seat-A">A석</b> 해결 처리 · 근거: A 근거</li><li><b class="seat-B">B석</b> 해결 처리 · 근거: B 근거</li></ul>',
+    );
+    expect(html).toContain('<b class="seat-B">B석</b> 철회 처리 · 근거: B가 철회');
+    // 전체 쟁점도 양쪽 근거를 모두 보인다
+    expect(html).toContain(
+      '<span class="badge">해결 · 라운드 2</span> <small>라운드 1 A석 개설</small><ul><li><b class="seat-A">A석</b> 해결 처리 · 근거: A 근거</li><li><b class="seat-B">B석</b> 해결 처리 · 근거: B 근거</li></ul>',
+    );
   });
 
-  it('끝난 라운드의 쟁점 박스는 열린 쟁점의 문구 수정 내용(자리·근거·이전 문구)을 보인다', async () => {
+  it('끝난 라운드의 쟁점 박스는 문구 수정 내용(자리·근거·이전 문구)을 보이고, 변경 없는 라운드는 쟁점을 되풀이하지 않는다', async () => {
     const u = await pair();
     const id = await start(u.a, { max_rounds: 3 });
     await ok(u.a, id, { expected_round: 1, issue_updates: [open('채식 메뉴를 매일 포함할지')] });
     await ok(u.b, id, { expected_round: 1 });
     await ok(u.a, id, { expected_round: 2, issue_updates: [change('revise', 'I1', '매일은 과함', { text: '채식 메뉴를 주 3회 포함할지' })] });
     await ok(u.b, id, { expected_round: 2 });
+    await ok(u.a, id, { expected_round: 3 });
+    await ok(u.b, id, { expected_round: 3 });
     const html = await u.page(`/app/d/${id}`);
-    expect(html).toContain('I1 채식 메뉴를 주 3회 포함할지 <span class="badge ok">이번 라운드 변경</span><br><small>A석 문구 수정: 매일은 과함 (이전: 채식 메뉴를 매일 포함할지)</small>');
+    expect(html).toContain(
+      '<b>I1</b> 채식 메뉴를 주 3회 포함할지 <span class="badge">열림</span><ul><li><b class="seat-A">A석</b> 문구 수정: 채식 메뉴를 매일 포함할지 → 채식 메뉴를 주 3회 포함할지 · 근거: 매일은 과함</li></ul>',
+    );
+    expect(html).toContain('<p>이번 라운드 변경 0건 · 종료 시 열림 1건</p><p class="note">이 라운드에는 쟁점 변경이 없습니다.</p>');
   });
 });
 
@@ -415,7 +433,7 @@ describe('부분 라운드 종료', () => {
     const summary = (await u.b('get_summary', { discussion_id: id })).data;
     expect(summary.issues).toEqual([expect.objectContaining({ ref: 'I1', title: 'A만 낸 쟁점', unresolved_at_end: true })]);
     expect(summary.turns[0].issue_changes[0]).toMatchObject({ ref: 'I1', pending: false });
-    expect(await u.page(`/app/d/${id}`)).toContain('[열림·종료 시 미종결]');
+    expect(await u.page(`/app/d/${id}`)).toContain('<span class="badge">열림 · 종료 시 미종결</span>');
   });
 });
 
