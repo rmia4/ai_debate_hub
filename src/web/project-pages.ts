@@ -37,26 +37,59 @@ function parseBackground(kind: BackgroundKind, body: Record<string, unknown>) {
   };
 }
 
-function backgroundFields(values: Record<string, unknown>, kind: BackgroundKind | null) {
+function backgroundFields(values: Record<string, unknown>, kind: BackgroundKind) {
   const v = (k: string) => esc(str(values, k));
   return `<label>제목 (${L.title}자 이내)<br><input name="title" required maxlength="${L.title}" size="60" value="${v('title')}"></label>
       <label>요약 (선택, ${L.summary}자 이내. AI가 열기 전에 필요한지 판단하는 한 줄 설명)<br><input name="summary" maxlength="${L.summary}" size="60" value="${v('summary')}"></label>
-      ${kind === null || kind === 'text' ? `<label>본문 (text만, ${L.body.toLocaleString('ko-KR')}자 이내)<br><textarea name="body" maxlength="${L.body}" rows="16" cols="60">${v('body')}</textarea></label>` : ''}
-      ${kind === null || kind !== 'text' ? `<label>위치 (link는 http·https URL, file은 C:\\…·/… 같은 절대경로)<br><input name="location" maxlength="${L.location}" size="60" value="${v('location')}"></label>` : ''}`;
+      ${kind === 'text' ? `<label>본문 (text만, ${L.body.toLocaleString('ko-KR')}자 이내)<br><textarea name="body" maxlength="${L.body}" rows="16" cols="60">${v('body')}</textarea></label>` : ''}
+      ${kind !== 'text' ? `<label>위치 (link는 http·https URL, file은 C:\\…·/… 같은 절대경로)<br><input name="location" maxlength="${L.location}" size="60" value="${v('location')}"></label>` : ''}`;
 }
 
-function newBackgroundForm(csrf: string, projectId: string, values: Record<string, unknown> = {}, error = '') {
+// 종류 라디오를 탭 모양으로 두고, 고른 종류에 맞는 칸만 :has()로 보인다(CSP가 인라인 스크립트를 막는다)
+const NEW_BACKGROUND_STYLE = `.bg-sub{margin:-.6rem 0 .2rem;color:var(--mute)}.bg-sub b{font-weight:600}
+.bg-form input:not([type]),.bg-form textarea{width:100%}
+.bg-form .hint{color:var(--mute);font-size:.82rem}
+.kind-tabs{display:flex;flex-wrap:wrap;margin:1rem 0 0;padding:0;border:0;border-bottom:1px solid var(--line)}
+.kind-tabs legend{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.kind-tabs label{position:relative;margin:0 0 -1px;padding:.5rem 1.1rem;min-height:44px;display:flex;align-items:center;font-family:var(--mono);font-size:.88rem;color:var(--mute);cursor:pointer;border:1px solid transparent;border-bottom:0}
+.kind-tabs label::before{content:"[";color:var(--line)}.kind-tabs label::after{content:"]";color:var(--line)}
+.kind-tabs input{position:absolute;opacity:0}
+.kind-tabs label:has(:checked){color:var(--acc);border-color:var(--line);background:var(--panel)}
+.kind-tabs label:has(:focus-visible){outline:2px solid var(--acc);outline-offset:-2px}
+.kind-panel{background:var(--panel);border:1px solid var(--line);border-top:0;padding:1rem 1.2rem 0}
+.kind-panel .row2{display:grid;grid-template-columns:1fr 1.6fr;gap:1rem}.kind-panel .row2 label{margin:.4rem 0}
+.f-body,.f-loc,.h-link,.h-file{display:none}
+.bg-form:has([value=text]:checked) .f-body,.bg-form:has([value=link]:checked) .f-loc,.bg-form:has([value=file]:checked) .f-loc{display:block}
+.bg-form:has([value=link]:checked) .h-link,.bg-form:has([value=file]:checked) .h-file{display:block}
+.bg-bar{position:sticky;bottom:0;display:flex;align-items:center;gap:.5rem 1rem;margin:1rem -1.2rem 0;padding:.7rem 1.2rem;background:var(--panel);border-top:1px dashed var(--line)}
+.bg-bar .note{flex:1;min-width:0;margin:0}.bg-bar a,.bg-bar button{white-space:nowrap}
+@media (max-width:640px){.kind-panel .row2{grid-template-columns:1fr}.bg-bar{position:static;flex-wrap:wrap}.bg-bar .note{flex-basis:100%}}`;
+
+function newBackgroundForm(csrf: string, p: Project, count: number, values: Record<string, unknown> = {}, error = '') {
   const kind = BACKGROUND_KINDS.includes(values.kind as BackgroundKind) ? (values.kind as BackgroundKind) : 'text';
-  return `${error ? `<p class="warn">${esc(error)}</p>` : ''}
-    <p class="warn"><b>기밀이나 개인정보를 넣지 마세요.</b> text 본문은 서버에 저장되고 참여하는 AI 서비스에 전달됩니다. ${FILE_NOTE}</p>
-    <form method="post" action="/app/p/${esc(projectId)}/backgrounds/new">${csrfField(csrf)}
-      <fieldset><legend>종류</legend>
-        ${BACKGROUND_KINDS.map(
-          (k) => `<label><input type="radio" name="kind" value="${k}"${k === kind ? ' checked' : ''}> ${k} (${KIND_LABEL[k]})</label>`,
-        ).join('')}
+  const v = (k: string) => esc(str(values, k));
+  return `<p class="bg-sub"><a href="${esc(projectHome(p.id))}"><b>${esc(p.name)}</b></a> 프로젝트의 모든 토론에서 AI가 함께 참고하는 자료입니다. <span class="badge">배경 ${count}/${PROJECT_LIMITS.backgrounds}</span></p>
+    ${error ? `<p class="warn">${esc(error)}</p>` : ''}
+    <form class="bg-form" method="post" action="/app/p/${esc(p.id)}/backgrounds/new">${csrfField(csrf)}
+      <fieldset class="kind-tabs"><legend>종류</legend>
+        ${BACKGROUND_KINDS.map((k) => `<label><input type="radio" name="kind" value="${k}"${k === kind ? ' checked' : ''}>${k} ${KIND_LABEL[k]}</label>`).join('')}
       </fieldset>
-      ${backgroundFields(values, null)}
-      <button type="submit">배경 추가</button>
+      <div class="kind-panel">
+        <div class="row2">
+          <label>제목 <span class="hint">· ${L.title}자 이내</span><input name="title" required maxlength="${L.title}" value="${v('title')}"></label>
+          <label>요약 <span class="hint">· 선택, ${L.summary}자 이내</span><input name="summary" maxlength="${L.summary}" placeholder="AI가 열기 전에 필요한지 판단하는 한 줄 설명" value="${v('summary')}"></label>
+        </div>
+        <label class="f-body">본문 <span class="hint">· ${L.body.toLocaleString('ko-KR')}자 이내</span><textarea name="body" maxlength="${L.body}" rows="20">${v('body')}</textarea></label>
+        <label class="f-loc">위치
+          <span class="hint h-link">http·https URL</span>
+          <span class="hint h-file">C:\\…·/… 같은 절대경로. ${FILE_NOTE}</span>
+          <input name="location" maxlength="${L.location}" value="${v('location')}"></label>
+        <div class="bg-bar">
+          <p class="note"><b>기밀이나 개인정보를 넣지 마세요.</b> text 본문은 서버에 저장되고 참여하는 AI 서비스에 전달됩니다.</p>
+          <a class="btn" href="${esc(projectHome(p.id))}">취소</a>
+          <button type="submit" class="btn fill">배경 추가</button>
+        </div>
+      </div>
     </form>`;
 }
 
@@ -167,8 +200,8 @@ export function projectPagesRouter(config: Config, db: Db) {
   router.get('/app/p/:id/backgrounds/new', async (req, res, next) => {
     try {
       const web = res.locals.web!;
-      const { project } = await projectsFor(db, web.user.id).get(req.params.id);
-      res.send(page(`배경 추가 · ${project.name}`, `${newBackgroundForm(web.csrf, project.id)}`, { nav: web }));
+      const { project, backgrounds } = await projectsFor(db, web.user.id).get(req.params.id);
+      res.send(page('배경 추가', newBackgroundForm(web.csrf, project, backgrounds.length), { nav: web, head: NEW_BACKGROUND_STYLE }));
     } catch (e) {
       handle(res, next, e);
     }
@@ -185,9 +218,14 @@ export function projectPagesRouter(config: Config, db: Db) {
       res.redirect(303, projectHome(req.params.id));
     } catch (e) {
       if (!(e instanceof DiscussionError) || !['invalid_settings', 'limit_exceeded'].includes(e.code)) return handle(res, next, e);
-      res
-        .status(e.code === 'limit_exceeded' ? 409 : 400)
-        .send(page('배경 추가', `${newBackgroundForm(web.csrf, req.params.id, body, e.message)}`, { nav: web }));
+      try {
+        const { project, backgrounds } = await projectsFor(db, web.user.id).get(req.params.id);
+        res
+          .status(e.code === 'limit_exceeded' ? 409 : 400)
+          .send(page('배경 추가', newBackgroundForm(web.csrf, project, backgrounds.length, body, e.message), { nav: web, head: NEW_BACKGROUND_STYLE }));
+      } catch (e2) {
+        handle(res, next, e2);
+      }
     }
   });
 
