@@ -48,7 +48,11 @@ dialog{background:var(--panel);color:var(--fg);border:1px solid var(--line);max-
 .topbar nav button::before{content:"[";color:var(--line)}.topbar nav button::after{content:"]";color:var(--line)}
 body>main{flex:1 0 auto;width:100%}
 footer{flex:none;height:3.2rem;line-height:3.2rem;padding:0 1rem;white-space:nowrap;overflow:hidden;font-family:var(--mono);font-size:.78rem;color:var(--mute);border-top:1px dashed var(--line);text-align:center}footer a{color:inherit}
-@media (max-width:640px){.cols{grid-template-columns:1fr}h1{font-size:1.6rem}}
+.settings{display:grid;grid-template-columns:12rem minmax(0,1fr);gap:2rem;align-items:start}.settings>section>:first-child{margin-top:0}
+.side{display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line)}
+.side a{padding:.55rem .9rem;color:var(--fg);text-decoration:none;border-left:3px solid transparent}.side a:hover{color:var(--acc)}
+.side a[aria-current]{border-left-color:var(--acc);background:var(--hl);font-weight:700}
+@media (max-width:640px){.cols{grid-template-columns:1fr}h1{font-size:1.6rem}.settings{grid-template-columns:1fr;gap:1.2rem}.side{flex-direction:row}.side a{border-left:0;border-bottom:3px solid transparent}.side a[aria-current]{border-bottom-color:var(--acc)}}
 @media (max-width:760px){.topbar{padding:.7rem 1rem}.wrap{padding:1.5rem 1rem}}`;
 
 interface NavSession {
@@ -71,9 +75,24 @@ export const csrfField = (csrf: string) => `<input type="hidden" name="csrf" val
 
 // 로그인한 화면 공통 메뉴와 로그아웃
 export const appNav = (web: NavSession) =>
-  `<nav><a href="/app">토론 목록</a><a href="/app/new">새 토론</a><a href="/app/connections">연결 설정</a><a href="/app/account">계정</a>${
+  `<nav><a href="/app">토론 목록</a><a href="/app/new">새 토론</a><a href="/app/connections">설정</a>${
     web.user.role === 'admin' ? '<a href="/admin">운영자</a>' : ''
   }${logoutForm(web.csrf)}</nav>`;
+
+// 설정 화면: 왼쪽 목록에서 항목을 고르고 오른쪽에 그 내용을 보인다
+const SETTINGS = [
+  ['connections', '/app/connections', '연결'],
+  ['account', '/app/account', '계정'],
+] as const;
+
+export const settingsPage = (current: (typeof SETTINGS)[number][0], body: string, web: NavSession) =>
+  page(
+    '설정',
+    `<div class="settings"><aside class="side">${SETTINGS.map(
+      ([key, href, label]) => `<a href="${href}"${key === current ? ' aria-current="page"' : ''}>${label}</a>`,
+    ).join('')}</aside><section>${body}</section></div>`,
+    { nav: web },
+  );
 
 // 복사 버튼과 대화상자 열기 동작. CSP가 인라인 스크립트를 막으므로 별도 파일로 낸다.
 export const APP_JS = `document.addEventListener('click', (e) => {

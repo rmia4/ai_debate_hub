@@ -22,7 +22,7 @@ import { getIssueLedger, type IssueChange, type IssueLedger } from '../db/issues
 import { PROJECT_LIMITS, projectsFor, type Background } from '../db/projects.js';
 import { deleteUser } from '../db/users.js';
 import { crossingText, instructionFor, joinMessage, PARTICIPANT_NAME } from '../instructions.js';
-import { csrfField, esc, page } from './html.js';
+import { csrfField, esc, page, settingsPage } from './html.js';
 import { projectBackgroundsSection, projectDetailSection, projectHome } from './project-pages.js';
 import {
   discussionMarkdown,
@@ -496,8 +496,8 @@ export function discussionPagesRouter(config: Config, db: Db) {
       const web = res.locals.web!;
       const usage = await discussionsFor(db, web.user.id).usage();
       res.send(
-        page(
-          '계정',
+        settingsPage(
+          'account',
           `
           <p><b>${esc(web.user.display_name)}</b>${web.user.email ? ` (${esc(web.user.email)})` : ''} · 가입 ${formatTime(web.user.created_at)}</p>
           <h2>사용량</h2>
@@ -515,7 +515,7 @@ export function discussionPagesRouter(config: Config, db: Db) {
           <form method="post" action="/app/account/delete">${csrfField(web.csrf)}
             <label><input type="checkbox" name="confirm" value="yes" required> 기록을 내려받았고 탈퇴합니다</label>
             <button type="submit">회원 탈퇴</button></form>`,
-          { nav: web },
+          web,
         ),
       );
     } catch (e) {
